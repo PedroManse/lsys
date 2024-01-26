@@ -17,6 +17,11 @@ fn main() -> Result<(), String> {
 	//let pub_date = ex(time::Date::from_str("1-12-1887"))?;
 	//let b = ex(Book::new(&conn, 9780140439083, "A Study In Scarlet".to_string(), vec![], pub_date))?;
 
+	let mut input = String::new();
+	println!("action:");
+	ex(stda:io::stdin().read_line(&mut input))?;
+	println!("`{input}`");
+
 	let mut stmt = ex(conn.prepare("SELECT * FROM books"))?;
 	let rows = ex(stmt.query_map([], Book::from_query))?;
 	let bks: Vec<Book> = rows.filter(|a|a.is_ok()).map(|b|b.unwrap()).collect();
