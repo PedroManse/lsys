@@ -1,5 +1,6 @@
+use serde::Deserialize;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Deserialize)]
 pub enum DateError {
 	MonthParseError,
 	YearParseError,
@@ -20,14 +21,14 @@ impl ToString for DateError {
 	}
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Deserialize)]
 pub enum Month {
 	Jan, Feb, Mar, Apr,
 	May, Jun, Jul, Aug,
 	Sep, Oct, Nov, Dec,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Deserialize)]
 pub struct Date {
 	year: i32,
 	month: Month,
@@ -138,6 +139,9 @@ impl Month {
 impl Date {
 	pub fn to_str(&self) -> String {
 		format!("{}-{}-{}", self.day, self.month.to_str(), self.year)
+	}
+	pub fn to_str_split(&self, split: &str) -> String {
+		format!("{}{split}{}{split}{}", self.day, self.month.to_str(), self.year)
 	}
 }
 

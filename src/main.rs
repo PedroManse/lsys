@@ -5,32 +5,112 @@ mod sql;
 //mod client {}
 //mod worker {}
 
-fn ex<A, E: ToString>(a: Result<A, E>) -> Result<A, String> {
-	a.map_err(|e|e.to_string())
-}
-
 use std::str::FromStr;
-fn main() -> Result<(), String> {
-	let conn = ex(sql::open("db"))?;
-	ex(conn.schema(sql::SQL_TABLE_SCHEMA))?;
+
+use axum::{
+	routing::get,
+	extract::Query,
+};
+//use axum::Form;
+use maud::{html, Markup};
+use serde::Deserialize;
+
+#[tokio::main]
+async fn main() {
+	let conn = sql::open("db").unwrap();
+	conn.schema(sql::SQL_TABLE_SCHEMA).unwrap();
 
 	//let pub_date = ex(time::Date::from_str("1-12-1887"))?;
 	//let b = ex(Book::new(&conn, 9780140439083, "A Study In Scarlet".to_string(), vec![], pub_date))?;
 
-	let mut input = String::new();
-	println!("action:");
-	ex(stda:io::stdin().read_line(&mut input))?;
-	println!("`{input}`");
+	//let mut stmt = conn.prepare("SELECT * FROM books").unwrap();
+	//let rows = stmt.query_map([], Book::from_query).unwrap();
+	//let bks: Vec<Book> = rows.filter(|a|a.is_ok()).map(|b|b.unwrap()).collect();
 
-	let mut stmt = ex(conn.prepare("SELECT * FROM books"))?;
-	let rows = ex(stmt.query_map([], Book::from_query))?;
-	let bks: Vec<Book> = rows.filter(|a|a.is_ok()).map(|b|b.unwrap()).collect();
-	println!("{:#?}", bks);
+	let app = axum::Router::new()
+		.route("/", get(display_search) )
+		.route("/list", get(display_all) )
+		.route("/search", get(perform_search) );
 
-	Ok(())
+	let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+	axum::serve(listener, app).await.unwrap();
 }
 
-#[derive(Debug)]
+async fn display_all() -> Markup {
+	let conn = sql::open("db").unwrap();
+	let mut stmt = conn.prepare("SELECT * FROM books").unwrap();
+	let rows = stmt.query_map([], Book::from_query).unwrap();
+	let books: Vec<Book> = rows.filter(|a|a.is_ok()).map(|b|b.unwrap()).collect();
+
+	html! { body{
+		table {
+
+			thead{ tr {
+				td { "ISBN" }
+				td { "Name" }
+				td { "Authors" }
+				td { "Published Date" }
+			} }
+
+			tbody{
+				@for book in &books {
+					tr{
+						th { (book.ISBN) }
+						td { (book.name) }
+						td { ("idk") }
+						td { (book.published.to_str_split("/")) }
+					}
+				}
+			}
+		}
+	} }
+}
+
+async fn display_search() -> Markup {
+	html! { head{
+		script src="https://unpkg.com/htmx.org@1.9.10" {}
+	}
+	body{
+		form hx-get="/search" hx-target="#rser" hx-swap="innerHTML" {
+			input name="ISBN" type="number" { }
+			input name="name" type="string" { }
+			button { "enviar" }
+		}
+		div id="rser" { }
+	} }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case, dead_code)] // for ISBN
+pub struct BookQuery {
+	ISBN: Option<String>,
+	name: Option<String>,
+}
+
+async fn perform_search(Query(qry): Query<BookQuery>) -> Markup {
+	println!("{:?}", qry);
+
+	html! {
+		table {
+			thead {
+				tr{
+					th { "ISBN" }
+					th { "Name" }
+					th { "Authors" }
+					th { "Date" }
+				}
+			}
+			tbody {
+				tr{
+					td {({ qry.ISBN.map(|i|i.to_string()).unwrap_or("Undefined".to_string()) })}
+					td {({ qry.name.unwrap_or("Undefined".to_string()) })}
+				}
+			}
+		}
+	}
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[allow(non_snake_case, dead_code)] // for ISBN
 pub struct Book {
 	ISBN: u64,
