@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+
+{{ define "social-nav-tab-style" }}
+	<style>
+
+#social-nav-tabs {
+	padding-top: 5px;
+}
+a.tab {
+	border-right-style: ridge;
+	text-decoration: none;
+	background-color: #1F1F1F;
+	color: white;
+	border-top-style: groove;
+}
+
+	</style>
+{{ end }}
+
+{{ define "social-focus" }}
+	{{ template "social-nav-tab-style"}}
+	<center id="social-nav-tabs">
+		<a class="sec_1 tab section" href="/social/all">All Posts</a>
+		<a class="sec_2 tab section" href="/social/subbed">Subbed Communities</a>
+		<a class="sec_3 tab section" href="/social/saved">Saved Posts</a>
+		<a class="sec_4 tab action" href="/social/posts/create">Create a post</a>
+		<a class="sec_5 tab action" href="/social/community/create">Create a community</a>
+	</center>
+{{ end }}
+
+{{ define "social-tab" }}
+<style>
+a.tab.sec_{{.}} {
+	color: red;
+}
+</style>
+{{ end }}
+
+
+{{ define "social-listing" }}
+	{{ template "social-nav-tab-style"}}
+	{{ template "social-sort" . }}
+	<center id="social-nav-tabs">
+		<a class="sec_1 tab section" href="/social/all">All Posts</a>
+		<a class="sec_2 tab section" href="/social/subbed">Subbed Communities</a>
+		<a class="sec_3 tab section" href="/social/saved">Saved Posts</a>
+		<a class="sec_4 tab action" href="/social/posts/create">Create a post</a>
+		<a class="sec_5 tab action" href="/social/community/create">Create a community</a>
+	</center>
+{{ end }}
+
+{{ define "social-sort" }}
+<script>
+
+addEventListener("load", ()=>{
+	// Sort Method Selector
+	const SMS = document.getElementById("social-sortmethod-selection");
+	SMS.addEventListener("change", ()=>{
+		location.replace(location.pathname+`?sortmethod=${SMS.value}`)
+	})
+})
+
+</script>
+<style>
+#social-nav-sortmethod {
+	position: absolute;
+	float: left;
+}
+</style>
+{{ $sm := .urlinfo.query.Get "sortmethod" }}
+<span id="social-nav-sortmethod">
+	<label for="social-sortmethod-selection">Sort Method:</label>
+	<select id="social-sortmethod-selection">
+		{{ range $i := .allsorts }}
+			{{ if eq $sm $i}}
+				<option selected value="{{$i}}">{{$i}}</option>
+			{{ else }}
+				<option value="{{$i}}">{{$i}}</option>
+			{{ end }}
+		{{ end }}
+	</select>
+</span>
+{{ end }}
+

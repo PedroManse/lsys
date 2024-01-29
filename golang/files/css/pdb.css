@@ -1,0 +1,21 @@
+body {
+	color: white;
+	background-color: #1F1F1F;
+}
+
+input.slot{
+	border: none;
+}
+
+.opc0 {
+	opacity: 0;
+}
+
+td[scope="row"] {
+	width: 200px;
+}
+
+button.rem, input.slot {
+	width: 200px;
+	height: 40px;
+}

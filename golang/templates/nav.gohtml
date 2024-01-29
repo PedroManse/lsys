@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+
+{{ define "top nav init" }}
+<style>
+
+body {
+	margin: 0;
+}
+
+#top-nav  {
+	background-color: darkgrey;
+	color: black;
+	display: inline-block;
+	width: 100%;
+	height: 40px;
+}
+
+#top-nav > ul {
+	display: inline;
+	width: 100%;
+}
+
+#top-nav > ul > li {
+	padding-left: 20px;
+	display: inline;
+	margin: auto;
+}
+
+#top-nav > ul > li > a {
+	font-size: 20px;
+	color: black;
+	display: inline;
+}
+
+#top-nav > ul > li > a:hover {
+	color: white;
+	text-decoration-style: double;
+	text-decoration-color: black;
+}
+
+</style>
+
+<nav id="top-nav">
+	<ul id="top-nav">
+{{ end }}
+
+{{ define "top nav end" }}
+	</ul>
+	</nav>
+{{ end }}
+
+{{ define "nav acc" }}
+	<span style="float: right;">
+		{{ if .acc.ok }}
+			<p style="display: inline-block">
+				Olá {{.acc.name}}
+				<a href="/login">Change Account!</a>
+			</p>
+			{{ else }}
+			<p style="display: inline-block">
+				Olá, Faça <a href="/login">Login!</a> Para disponibilizar todas as área do site
+			</p>
+		{{ end }}
+	</span>
+{{ end }}
+
+{{ define "nav index" }}
+	<li><a href="/">Home</a></li>
+{{ end }}
+
+{{ define "nav users" }}
+	{{ if .acc.ok }}
+		<li><a href="/users">Users</a></li>
+	{{ else }}
+		<li>🔒<a href="/login">Users</a></li>
+	{{ end }}
+{{ end }}
+
+{{ define "nav" }}
+	{{ template "top nav init" }}
+
+	{{ template "nav index" . }}
+	{{ template "nav users" . }}
+
+	{{ template "nav acc" . }}
+	{{ template "top nav end" }}
+{{ end }}
+
+
+{{ define "nav-login" }}
+	{{ template "top nav init" }}
+
+	{{ template "nav index" . }}
+	{{ template "nav users" . }}
+
+	{{ template "top nav end" }}
+{{end}}
+

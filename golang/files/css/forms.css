@@ -1,0 +1,11 @@
+body {
+	color: white;
+	background-color: #1F1F1F;
+}
+
+#content {
+	border-style: solid;
+	border-color: gray;
+	padding: 5px;
+	color: white;
+}

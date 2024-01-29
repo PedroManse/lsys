@@ -1,0 +1,29 @@
+body {
+	background-color: #1F1F1F;
+	color: white;
+}
+
+.failed {
+	color: #F55;
+}
+
+div.center {
+	padding-top: 30px;
+	text-align: center;
+}
+
+div.center > form {
+	* {
+		border-radius: 0;
+	}
+	input {
+		width: 200px;
+		height: 22.2px;
+	}
+	button {
+		margin-top: 10px;
+		width: 206.6px;
+		height: 22.2px;
+	}
+}
+

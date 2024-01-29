@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet" type="text/css" href="/files/css/acc.css">
+		<title>Login</title>
+	</head>
+	<body>
+		{{ template "nav-login" . }}
+		<div class="center">
+			<form action="/login" method="POST">
+				<input placeholder="Email" id="email" name="email" type="email"><br>
+				<input placeholder="Password" id="password" name="password" type="password"><br>
+				<button>Login</button>
+			</form>
+			{{ if .logic.failed }}
+				<h3 class="failed"> {{ .logic.failReason }} </h3>
+			{{ end }}
+			<h3>Doesn't have an account?</h3>
+			<h3><a href="/register">Register!</a></h3>
+		</div>
+	</body>
+</html>
+

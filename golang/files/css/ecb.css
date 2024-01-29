@@ -1,0 +1,16 @@
+body {
+	color: white;
+	background-color: #1F1F1F;
+}
+
+#content {
+	padding-top: 20px;
+}
+
+pre {
+	border-style: solid;
+	border-color: gray;
+	padding: 5px;
+	font-size: 28px;
+	color: white;
+}

@@ -1,0 +1,67 @@
+
+div.post.page {
+	div.content {
+		img { max-height: 270px; max-width: 480px; }
+		h1 { margin: 10px; }
+		h2 { margin: 8px; }
+		h3 { margin: 6px; }
+		h4 { margin: 4px; }
+		h5 { margin: 2px; }
+		h6 { margin: 1px; }
+	}
+}
+
+button.reply-getter {
+	padding: 0px;
+	border-radius: 0;
+	width: 20px;
+	height: 20px;
+	img {
+		margin-bottom: -3px;
+		border-radius: 0;
+		height: 100%;
+		width: 100%;
+	}
+}
+
+div.comments {
+	div.comment {
+		border-right-style: none;
+		border-style: unset;
+		border-left-style: solid;
+		margin: 4px;
+		padding: 4px;
+		margin-right: 0;
+		padding-right: 0;
+
+
+		.border_1 { border-color: darkblue; }
+		.border_2 { border-color: darkred; }
+		.border_3 { border-color: darkgreen; }
+		.border_4 { border-color: #8F8F8F8F; }
+
+		font-size: 18px;
+		span.op {
+			.name { color: #4080FF; }
+			.email { color: #4F4F4F; }
+			.email:before { content: "<"; }
+			.email:after { content: ">"; }
+		}
+
+		div.content {
+			p { margin: 2px 0px 4px 3px; }
+			img { max-height: 180px; max-width: 320px; }
+		}
+	}
+	div.comment:target {
+		border-top: dashed;
+		border-bottom: dashed;
+		border-top-color: #E1E1E166;
+		border-bottom-color: #E1E1E166;
+	}
+}
+
+span.commentLink {
+	float: right;
+}
+

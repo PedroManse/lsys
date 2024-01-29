@@ -1,0 +1,17 @@
+
+div.post.card {
+	span.community {
+	}
+	div.content {
+		overflow-y: clip;
+		margin-bottom: 3px;
+		max-height: 130px;
+		h1 { margin: 8px; }
+		h2 { margin: 6px; }
+		h3 { margin: 4px; }
+		h4 { margin: 2px; }
+		h5 { margin: 1px; }
+		h6 { margin: 0.5px; }
+	}
+}
+

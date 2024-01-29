@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet" type="text/css" href="/files/css/acc.css">
+		<title>
+			{{ if .acc }}
+				Change Account
+			{{ else }}
+				Register Account
+			{{ end }}
+		</title>
+	</head>
+	<body>
+		{{ template "nav-login" . }}
+
+		<div class="center">
+			<form action="/register" method="POST">
+				<input placeholder="UserName" id="username" name="username" type="text"><br>
+				<input placeholder="Email" id="email" name="email" type="email"><br>
+				<input placeholder="Password" id="password" name="password" type="password"><br>
+				<button> Create </button>
+			</form>
+
+			{{ if .logic.failed }}
+				<h2 class="failed">{{ .logic.failReason }}</h2>
+				{{ if .logic.failEmail }}
+					<h2><a href="/login">Maybe Login</a></h2>
+				{{ end }}
+			{{ end }}
+		</div>
+	</body>
+</html>
+

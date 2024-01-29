@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>LSYS - Book Listing</title>
+</head>
+<body>
+	{{ template "nav" . }}
+	<table>
+		<thead>
+			<th>ISBN</th>
+			<th>Name</th>
+			<th>Publish Date</th>
+			<th>Avaliable</th>
+		</thead>
+		<tbody>
+			{{ range .books.AMap }}
+			<tr>
+				<td>{{ .ISBN }}</td>
+				<td>{{ .Name }}</td>
+				<td>{{ .Published.Format "02-01-2006" }}</td>
+				{{ if .LastBorrow.Has }}
+					{{ $retinfo := .UntilFree }}
+					{{ $days := $retinfo.Left }}
+					{{ $should := $retinfo.Right }}
+
+					{{ if eq $days 0}}
+						<td> Should be returned today </td>
+					{{ else }}
+						{{ if $should }}
+							<td> Should have been returned {{$days}} days ago </td>
+						{{ else }}
+							<td> Will be returned in {{$days}} days </td>
+						{{ end }}
+					{{ end }}
+				{{ else }}
+					<td> yes </td>
+				{{ end }}
+			</tr>
+			{{ end }}
+		</tbody>
+	</table>
+</body>
+</html>
