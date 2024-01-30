@@ -22,9 +22,20 @@
 
 	<section>
 	{{ if .avail }}
-		BORROW
+		<form> <button>Reserve</button> </form>
 	{{ else }}
-		<strong>BORROWED, LOSER!</strong>
+		{{ if eq .borrower_status "reserved" }}
+			<h2>Status: Reserved</h2>
+			<p>Still possible to read this book inside the library</p>
+			<p>Book will be taken in {{.borrower_time_left}} days</p>
+			{{ if .borrower_status_past }}
+				<p>Book should have been returned {{.borrower_time_lim}} days ago</p>
+			{{ else }}
+				<p>Book may be returned in {{.borrower_time_lim}} days</p>
+			{{ end }}
+		{{ else }}
+			<h2>Status: Borrowed</h2>
+		{{ end }}
 	{{ end }}
 	</section>
 </article>

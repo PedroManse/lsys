@@ -49,7 +49,11 @@ var (
 	AuthorToId SyncMap[string, uint64]
 
 	// book -> (when book was borrowed, by who)
-	Borrows SyncMap[uint64, Tuple[time.Time, uint64]]
+	Borrows SyncMap[uint64, Tuple[time.Time, int64]]
+	UIDToToBorrowRequest SyncMap[int64, []uint64]
+	BIDToBorrowRequestUser SyncMap[uint64, int64]
+	// (uid, bid) -> expected_pickup
+	BorrowRequestExpectedPickup SyncMap[Tuple[int64, uint64], time.Time]
 )
 
 var HTMLError = InlineComponent(`<h1>{{.}}</h1>`)
@@ -106,16 +110,31 @@ func gatherBookInfo(w HttpWriter, r HttpReq, info map[string]any) (bool, any) {
 	}
 	binfo["book"] = book
 	binfo["avail"] = !book.BorrowerId.Has()
-	if (book.BorrowerId.Has()) {
+	if (book.BorrowerId.Has() || ) {
 		UID, _ := book.BorrowerId.Get()
-		acc, ok := IDToAccount.Get(UID)
-		if (!ok) {
+		acc := IDToAccount.GetO(UID)
+		acc_res_id := BIDToBorrowRequestUser.GetO(UID)
+		UID = acc_res_id
+		acc_res := IDToAccount.GetO(UID)
+		if (acc.Has()) {
+			binfo["borrower_name"] = acc.Name
+			binfo["borrower_email"] = acc.Email
+			binfo["borrower_status"] = "borrowed"
+		} else if (acc_res.Has()) {
+			binfo["borrower_name"] = acc_res.Name
+			binfo["borrower_email"] = acc_res.Email
+			binfo["borrower_status"] = "reserved"
+			//TODO fix this; should provide expected return time when borrowed
+			// : should provide expected borrow time and return time when reserved
+			//EPickUpTime := BorrowRequestExpectedPickup.GetI(Tuple{acc.ID, book.ID})
+			//hoursLeft := EPickUpTime.Sub(time.Now()).Hours()
+			//past := hoursLeft<=0.1
+			//binfo["borrower_time_left"] = int(hoursLeft/24)
+			//binfo["borrower_time_lim"] = nil
+		} else {
 			binfo["borrower_error"] = "Can't find borrower account"
 			binfo["borrower_name"] = "?"
 			binfo["borrower_email"] = "?"
-		} else {
-			binfo["borrower_name"] = acc.Name
-			binfo["borrower_email"] = acc.Email
 		}
 
 		days, past := book.UntilFree().Unpack()
@@ -184,6 +203,32 @@ func sql_load(db *sql.DB) error {
 	}
 
 	rows, e = SQLGet(
+		"lsys.sql_load # get borrow queries",
+		`SELECT user_id, book_id, expected_pickup FROM reserve_query`
+	)
+	if (e != nil) {return e}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			BID uint64
+			UID int64
+			pickup_s string
+		)
+		e = rows.Scan(&BID, &UID, &pickup_s)
+		if (e != nil) {return e}
+		pickup, e := ParseTime(pickup_s)
+		if (e != nil) {return e}
+		BIDToBorrowRequestUser.Set(BID, UID)
+		// pre-existing user requests
+		// zerovalue = []uint64{}
+		ureqs := UIDToToBorrowRequest.GetO(UID).Default([]uint64{})
+		ureqs.append(BID)
+		UIDToToBorrowRequest.Set(UID, ureqs)
+		BorrowRequestExpectedPickup.Set(Tuple{UID, BID}, pickup)
+	}
+
+	rows, e = SQLGet(
 		"lsys.sql_load # get books",
 		`SELECT ISBN, id, name, published, last_borrow, borrower_id FROM books;`,
 	)
@@ -213,7 +258,8 @@ func sql_load(db *sql.DB) error {
 		}
 
 		AllBooks.Set(ID, b)
-		if (!LastBorrow.Has()) {
+		// has not been picked up nor is reserved
+		if !(LastBorrow.Has() || BIDToBorrowRequestUser.Has(ID)) {
 			AvaliableBooks.Set(ID, b)
 		}
 	}
@@ -228,9 +274,9 @@ func sql_load(db *sql.DB) error {
 		var uid, bid uint64
 		var when_s string
 		e = rows.Scan(&uid, &bid, &when_s)
-		if (e != nil) {panic(e)}
+		if (e != nil) {return e}
 		when, e := ParseTime(when_s)
-		if (e != nil) {panic(e)}
+		if (e != nil) {return e}
 		Borrows.Set( bid, Tuple[time.Time, uint64]{when, uid} )
 	}
 
@@ -254,6 +300,9 @@ func init() {
 	IDToAuthor.Init()
 	AuthorToId.Init()
 	Borrows.Init()
+	BIDToBorrowRequestUser.Init()
+	UIDToToBorrowRequest.Init()
+	BorrowRequestExpectedPickup.Init()
 
 	AttachInfo("lsys", "is_worker", "BOOL NOT NULL DEFAULT FALSE")
 
@@ -293,6 +342,15 @@ CREATE TABLE IF NOT EXISTS borrowed (
 	FOREIGN KEY(book_id) REFERENCES books(id)
 );
 
+CREATE TABLE IF NOT EXISTS reserve_query (
+	user_id INTEGER NOT NULL,
+	book_id INTEGER NOT NULL,
+	expected_pickup TEXT NOT NULL,
+	UNIQUE(user_id, book_id),
+	FOREIGN KEY(user_id) REFERENCES accounts(id),
+	FOREIGN KEY(book_id) REFERENCES books(id)
+)
+
 CREATE TABLE IF NOT EXISTS borrow_log (
 	user_id INTEGER NOT NULL,
 	book_id INTEGER NOT NULL,
@@ -306,4 +364,4 @@ CREATE TABLE IF NOT EXISTS borrow_log (
 );
 `
 //TODO: ISBN -> "cover art".webp table
-
+,

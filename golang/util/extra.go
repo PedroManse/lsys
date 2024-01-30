@@ -309,6 +309,20 @@ func (O Option[T]) Default(some T) T {
 	return *O.some
 }
 
+func (O Option[T]) Or(some *T) Option[T] {
+	if O.some == nil {
+		O.some = some
+	}
+	return O
+}
+
+func (O Option[T]) OptOr(some_o Option[T]) Option[T] {
+	if O.some == nil {
+		O.some = some_o.some
+	}
+	return O
+}
+
 const Option_T_Nil = constError("")
 func (O Option[T]) Get() (d T, e error) {
 	// d = zerovalue of T
