@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<link rel="stylesheet" type="text/css" href="/files/css/book.css">
+</head>
+<body>
+	{{ template "nav" . }}
+{{ with .logic }}
+<title>LSYS - {{ .book.Name }}</title>
+<article>
+	<aside> <img
+		src="/files/img/books/{{.book.ISBN}}"
+		onerror="this.src='/files/img/missing'"
+	></img> </aside>
+
+	<section>
+		<h1 id="book-name"><i>{{ .book.Name }}</i></h1>
+		<h5 id="ISBN">{{.book.ISBN}}</h5>
+		<h2>Published in: {{ .book.Published }}</h2>
+	</section>
+
+	<section>
+	{{ if .avail }}
+		BORROW
+	{{ else }}
+		<strong>BORROWED, LOSER!</strong>
+	{{ end }}
+	</section>
+</article>
+</body>
+</html>
+{{end}}
+

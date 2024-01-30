@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>LSYS - Book Listing</title>
+</head>
+<body>
+	{{ template "nav" . }}
+	<form method="POST">
+		<input name="ISBN" type="number" placeholder="ISBN">
+		<input name="name" type="text" placeholder="Name">
+		<input name="published" type="text" placeholder="Published Date">
+		<button>Add</button>
+	</form>
+</body>
+</html>
