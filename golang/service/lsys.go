@@ -13,10 +13,13 @@ type Book struct {
 	ID uint64
 	Name string
 	Published string
+	NextBorrow Option[time.Time]
 	LastBorrow Option[time.Time]
 	BorrowerId Option[int64]
 }
 
+// (days it will still be reserved), false
+// (days since it should have been returned), true
 func (B Book) UntilFree() Tuple[int, bool] {
 	th19, _ := B.LastBorrow.Get()
 	ReturnLimit := th19.Add(MaxBorrowTime)
@@ -25,6 +28,8 @@ func (B Book) UntilFree() Tuple[int, bool] {
 	if (days < 0) {days = -days}
 	return Tuple[int, bool]{days, hoursLeft<=0.1}
 }
+
+//func (B Book) StillReserved() Tuple[int, bool] { }
 
 // max borrow time is ten days
 const MaxBorrowTime = 10*24*time.Hour
@@ -50,10 +55,9 @@ var (
 
 	// book -> (when book was borrowed, by who)
 	Borrows SyncMap[uint64, Tuple[time.Time, int64]]
+
+	// all reserved books
 	UIDToToBorrowRequest SyncMap[int64, []uint64]
-	BIDToBorrowRequestUser SyncMap[uint64, int64]
-	// (uid, bid) -> expected_pickup
-	BorrowRequestExpectedPickup SyncMap[Tuple[int64, uint64], time.Time]
 )
 
 var HTMLError = InlineComponent(`<h1>{{.}}</h1>`)
@@ -110,19 +114,17 @@ func gatherBookInfo(w HttpWriter, r HttpReq, info map[string]any) (bool, any) {
 	}
 	binfo["book"] = book
 	binfo["avail"] = !book.BorrowerId.Has()
-	if (book.BorrowerId.Has() || ) {
+	if (book.BorrowerId.Has()) {
 		UID, _ := book.BorrowerId.Get()
-		acc := IDToAccount.GetO(UID)
-		acc_res_id := BIDToBorrowRequestUser.GetO(UID)
-		UID = acc_res_id
-		acc_res := IDToAccount.GetO(UID)
-		if (acc.Has()) {
+		acc := IDToAccount.GetI(UID)
+		//TODO better has method && doesn't have account resolution
+		if (book.LastBorrow.Has()) {
 			binfo["borrower_name"] = acc.Name
 			binfo["borrower_email"] = acc.Email
 			binfo["borrower_status"] = "borrowed"
-		} else if (acc_res.Has()) {
-			binfo["borrower_name"] = acc_res.Name
-			binfo["borrower_email"] = acc_res.Email
+		} else if (book.NextBorrow.Has()) {
+			binfo["borrower_name"] = acc.Name
+			binfo["borrower_email"] = acc.Email
 			binfo["borrower_status"] = "reserved"
 			//TODO fix this; should provide expected return time when borrowed
 			// : should provide expected borrow time and return time when reserved
@@ -176,6 +178,7 @@ func addBook(w HttpWriter, r HttpReq, info map[string]any) (bool, any) {
 			ISBN, ID, name,
 			pubdate,
 			OptPtr[time.Time](nil),
+			OptPtr[time.Time](nil),
 			OptPtr[int64](nil),
 		}
 		AvaliableBooks.Set(ID, b)
@@ -203,34 +206,8 @@ func sql_load(db *sql.DB) error {
 	}
 
 	rows, e = SQLGet(
-		"lsys.sql_load # get borrow queries",
-		`SELECT user_id, book_id, expected_pickup FROM reserve_query`
-	)
-	if (e != nil) {return e}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			BID uint64
-			UID int64
-			pickup_s string
-		)
-		e = rows.Scan(&BID, &UID, &pickup_s)
-		if (e != nil) {return e}
-		pickup, e := ParseTime(pickup_s)
-		if (e != nil) {return e}
-		BIDToBorrowRequestUser.Set(BID, UID)
-		// pre-existing user requests
-		// zerovalue = []uint64{}
-		ureqs := UIDToToBorrowRequest.GetO(UID).Default([]uint64{})
-		ureqs.append(BID)
-		UIDToToBorrowRequest.Set(UID, ureqs)
-		BorrowRequestExpectedPickup.Set(Tuple{UID, BID}, pickup)
-	}
-
-	rows, e = SQLGet(
 		"lsys.sql_load # get books",
-		`SELECT ISBN, id, name, published, last_borrow, borrower_id FROM books;`,
+		`SELECT ISBN, id, name, published, last_borrow, next_borrow, borrower_id FROM books;`,
 	)
 	if (e != nil) {return e}
 	defer rows.Close()
@@ -241,25 +218,41 @@ func sql_load(db *sql.DB) error {
 			Name string
 			Published string
 			LastBorrow_s_o *string
+			NextBorrow_s_o *string
 			BorrowerId_o *int64
 		)
 
-		e := rows.Scan( &ISBN, &ID, &Name, &Published, &LastBorrow_s_o, &BorrowerId_o )
+		e := rows.Scan(
+			&ISBN, &ID,
+			&Name, &Published,
+			&LastBorrow_s_o,
+			&NextBorrow_s_o,
+			&BorrowerId_o,
+		)
 		if (e != nil) {return e}
 		LastBorrow_s := OptPtr(LastBorrow_s_o)
 		LastBorrow, _ := OptMapFal(LastBorrow_s, ParseTime)
+		NextBorrow_s := OptPtr(NextBorrow_s_o)
+		NextBorrow, _ := OptMapFal(NextBorrow_s, ParseTime)
+
 		BorrowerId := OptPtr(BorrowerId_o)
 
-		b := Book {
+		// if reserved, update map of user requests
+		//ureqs := UIDToToBorrowRequest.GetO(UID).Default([]uint64{})
+		//ureqs = append(ureqs, BID)
+		//UIDToToBorrowRequest.Set(UID, ureqs)
+
+		b := Book{
 			ISBN, ID, Name,
 			Published,
+			NextBorrow,
 			LastBorrow,
 			BorrowerId,
 		}
 
 		AllBooks.Set(ID, b)
 		// has not been picked up nor is reserved
-		if !(LastBorrow.Has() || BIDToBorrowRequestUser.Has(ID)) {
+		if !(BorrowerId.Has()) {
 			AvaliableBooks.Set(ID, b)
 		}
 	}
@@ -271,13 +264,14 @@ func sql_load(db *sql.DB) error {
 	if (e != nil) {return e}
 	defer rows.Close()
 	for rows.Next() {
-		var uid, bid uint64
+		var uid int64
+		var bid uint64
 		var when_s string
 		e = rows.Scan(&uid, &bid, &when_s)
 		if (e != nil) {return e}
 		when, e := ParseTime(when_s)
 		if (e != nil) {return e}
-		Borrows.Set( bid, Tuple[time.Time, uint64]{when, uid} )
+		Borrows.Set( bid, Tuple[time.Time, int64]{when, uid} )
 	}
 
 	return nil
@@ -300,9 +294,7 @@ func init() {
 	IDToAuthor.Init()
 	AuthorToId.Init()
 	Borrows.Init()
-	BIDToBorrowRequestUser.Init()
 	UIDToToBorrowRequest.Init()
-	BorrowRequestExpectedPickup.Init()
 
 	AttachInfo("lsys", "is_worker", "BOOL NOT NULL DEFAULT FALSE")
 
@@ -317,6 +309,7 @@ CREATE TABLE IF NOT EXISTS books (
 	name TEXT NOT NULL,
 	published TEXT NOT NULL,
 	last_borrow TEXT,
+	next_borrow TEXT,
 	borrower_id INTEGER
 );
 
@@ -342,15 +335,6 @@ CREATE TABLE IF NOT EXISTS borrowed (
 	FOREIGN KEY(book_id) REFERENCES books(id)
 );
 
-CREATE TABLE IF NOT EXISTS reserve_query (
-	user_id INTEGER NOT NULL,
-	book_id INTEGER NOT NULL,
-	expected_pickup TEXT NOT NULL,
-	UNIQUE(user_id, book_id),
-	FOREIGN KEY(user_id) REFERENCES accounts(id),
-	FOREIGN KEY(book_id) REFERENCES books(id)
-)
-
 CREATE TABLE IF NOT EXISTS borrow_log (
 	user_id INTEGER NOT NULL,
 	book_id INTEGER NOT NULL,
@@ -363,5 +347,4 @@ CREATE TABLE IF NOT EXISTS borrow_log (
 	FOREIGN KEY(book_id) REFERENCES books(id)
 );
 `
-//TODO: ISBN -> "cover art".webp table
-,
+
