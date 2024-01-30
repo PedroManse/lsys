@@ -26,6 +26,7 @@ var infos = []info{}
 var names []string
 var AttachAccountInfo SyncMap[int64, AccountInfo]
 
+// DataCommand not be non-nullable without defaut param
 func AttachInfo(InfoArea, InfoName, DataCommand string) {
 	// prepare DataCommand for next command
 	infos = append(infos, info{InfoArea, InfoName, DataCommand})

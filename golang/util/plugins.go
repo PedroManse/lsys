@@ -3,6 +3,7 @@ package util
 import (
 	"errors"
 	"net/http"
+	"strconv"
 )
 
 var (
@@ -55,6 +56,21 @@ func acc(w HttpWriter, r HttpReq, info map[string]any) (render bool, ret_r any) 
 	return
 }
 var GOTM_account = GOTMPlugin{"acc", acc}
+
+func GOTM_URLID(IDName string) GOTMPlugin {
+	id_from_url := func (w HttpWriter, r HttpReq, info map[string]any) (render bool, ret_r any) {
+		mp_r, exists := info["urlid"]
+		if (!exists) {
+			mp_r = make(map[string]Tuple[uint64, error])
+		}
+		mp := mp_r.(map[string]Tuple[uint64, error])
+		id_s := r.URL.Query().Get(IDName)
+		ID, e := strconv.ParseUint(id_s, 10, 64)
+		mp[IDName] = Tuple[uint64, error]{ID, e}
+		return true, mp_r
+	}
+	return GOTMPlugin{"urlid", id_from_url}
+}
 
 func url_to_info(w HttpWriter, r HttpReq, info map[string]any) (render bool, ret_r any) {
 	ret_r = make(map[string]any)

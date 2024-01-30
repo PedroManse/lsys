@@ -98,6 +98,7 @@ var ( // system pages
 
 func main() {
 	InitSQL("sqlite3.db")
+	InitAssoc()
 
 	// site-wide service
 	http.Handle("/", index)
@@ -107,9 +108,13 @@ func main() {
 	http.Handle("/favicon.ico", StaticFile("./files/dice.ico"))
 	http.Handle("/files/", http.StripPrefix("/files", http.FileServer(http.Dir("./files/"))))
 
-	http.Handle("/lsys/list/all", service.ListAllBooks)
+	// default landing page is to list avaliable books
+	http.Handle("/lsys/", service.ListAvaliableBooks)
+	http.Handle("/lsys/all", service.ListAllBooks)
+	http.Handle("/lsys/add", service.AddBook)
+	http.Handle("/lsys/book", service.DisplayBook)
 
-	// real-time WebSocket chat
+	// IF NOT EXISTS real-time WebSocket chat
 	FLog.Printf(FLOG_INFO, "Running")
 	panic(http.ListenAndServe("0.0.0.0:8080", nil))
 }

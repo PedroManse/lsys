@@ -17,8 +17,12 @@
 			{{ range .books.AMap }}
 			<tr>
 				<td>{{ .ISBN }}</td>
-				<td>{{ .Name }}</td>
-				<td>{{ .Published.Format "02-01-2006" }}</td>
+				<td>
+					<a href="/lsys/book?bid={{.ID}}">
+						{{ .Name }}
+					</a>
+				</td>
+				<td>{{ .Published }}</td>
 				{{ if .LastBorrow.Has }}
 					{{ $retinfo := .UntilFree }}
 					{{ $days := $retinfo.Left }}

@@ -14,6 +14,7 @@ func Hash(s string) HashResult {
 	return h.Sum32()+uint32(90749*len(s))
 }
 
+const SyncMapMissingKey = constError("util/extra.SyncMap missing Get Key in .GetE call")
 type SyncMap[Key comparable, Value any] struct {
 	MAP map[Key]Value
 	MUTEX sync.Mutex
@@ -66,6 +67,41 @@ func (S *SyncMap[K, V]) Get(key K) (v V, has bool) {
 	return
 }
 
+func (S *SyncMap[K, V]) GetO(key K) Option[V] {
+	S.Lock()
+	defer S.Unlock()
+	v, has := S.MAP[key]
+	if (has) {
+		return OptPtr(&v)
+	} else {
+		return OptPtr[V](nil)
+	}
+}
+
+func (S *SyncMap[K, V]) GetE(key K) (v V, hase error) {
+	S.Lock()
+	defer S.Unlock()
+	var has bool
+	v, has = S.MAP[key]
+	if (has) {
+		hase = SyncMapMissingKey
+	}
+	return
+}
+
+func (S *SyncMap[K, V]) GetT(key K) Tuple[V,bool] {
+	S.Lock()
+	defer S.Unlock()
+	v, has := S.MAP[key]
+	return Tuple[V, bool]{v, has}
+}
+
+func (S *SyncMap[K, V]) GetI(key K) (v V) {
+	S.Lock()
+	defer S.Unlock()
+	return S.MAP[key]
+}
+
 func (S *SyncMap[K, V]) Unset(key K) {
 	S.Lock()
 	defer S.Unlock()
@@ -77,12 +113,6 @@ func (S *SyncMap[K, V]) Has(key K) ( has bool ) {
 	defer S.Unlock()
 	_, has = S.MAP[key]
 	return has
-}
-
-func (S *SyncMap[K, V]) GetI(key K) (v V) {
-	S.Lock()
-	defer S.Unlock()
-	return S.MAP[key]
 }
 
 type Tuple[K any, V any] struct {
@@ -272,10 +302,11 @@ func (O Option[T]) Has() bool {
 	return O.some != nil
 }
 
-func (O Option[T]) Default(some T) {
+func (O Option[T]) Default(some T) T {
 	if (O.some == nil) {
 		O.some=&some
 	}
+	return *O.some
 }
 
 const Option_T_Nil = constError("")

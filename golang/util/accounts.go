@@ -18,7 +18,7 @@ type Account struct {
 }
 
 var (
-	// old
+	// TODO: remove old
 	accLock = sync.Mutex{}
 	Accounts = make(map[string]*Account)
 

@@ -183,7 +183,10 @@ func (tp templatedPage) ServeHTTP (w HttpWriter, r HttpReq) {
 
 	if (render) {
 		e := tp.Template.Execute(w, tp.Info)
-		if (e != nil) { panic(e) }
+		if (e != nil) {
+			FLog.Printf(FLOG_ERROR, "Panic in Template %w", e)
+			panic(e)
+		}
 	}
 }
 

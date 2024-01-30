@@ -4,15 +4,17 @@ import (
 	. "mysrv/util"
 	"time"
 	"database/sql"
+	"strconv"
+	"net/http"
 )
 
 type Book struct {
 	ISBN uint64
 	ID uint64
 	Name string
-	Published time.Time
+	Published string
 	LastBorrow Option[time.Time]
-	BorrowerId Option[uint64]
+	BorrowerId Option[int64]
 }
 
 func (B Book) UntilFree() Tuple[int, bool] {
@@ -33,6 +35,10 @@ func ParseTime( v string ) (time.Time, error) {
 func FormatTime( t time.Time ) (string) {
 	return t.Format(TimeFormating)
 }
+const HTMLTimeFormating = "2006-01-02"
+func ParseHTMLTime( v string ) (time.Time, error) {
+	return time.Parse(HTMLTimeFormating, v)
+}
 
 // maps
 var (
@@ -46,6 +52,18 @@ var (
 	Borrows SyncMap[uint64, Tuple[time.Time, uint64]]
 )
 
+var HTMLError = InlineComponent(`<h1>{{.}}</h1>`)
+
+var DocError = InlineComponent(`
+<!DOCTYPE html>
+<html> <head>
+	<meta charset="UTF-8">
+	<title>LSYS - Error!</title>
+</head> <body>
+	<h1>{{.}}</h1> <a href="/lsys/">LSYS - home</a>
+</body> </html>
+`)
+
 var (
 	ListAllBooks = TemplatePage(
 		"html/list.gohtml",
@@ -54,7 +72,101 @@ var (
 		},
 		[]GOTMPlugin{GOTM_account},
 	)
+	ListAvaliableBooks = TemplatePage(
+		"html/list.gohtml",
+		map[string]any{
+			"books":&AvaliableBooks,
+		},
+		[]GOTMPlugin{GOTM_account},
+	)
+	DisplayBook = LogicPage(
+		"html/book.gohtml", nil,
+		[]GOTMPlugin{GOTM_account, GOTM_URLID("bid")},
+		gatherBookInfo,
+	)
+	AddBook = LogicPage(
+		"html/add.gohtml", nil,
+		[]GOTMPlugin{GOTM_account, GOTM_mustacc},
+		addBook,
+	)
 )
+
+func gatherBookInfo(w HttpWriter, r HttpReq, info map[string]any) (bool, any) {
+	bid, e := info["urlid"].(map[string]Tuple[uint64, error])["bid"].Unpack()
+	if (e != nil) {
+		DocError.Render(w, e)
+		return false, nil
+	}
+	binfo := make(map[string]any)
+	binfo["ID"] = bid
+	book, ok := AllBooks.Get(bid)
+	if (!ok) {
+		DocError.Render(w, "No book with such ID")
+		return false, nil
+	}
+	binfo["book"] = book
+	binfo["avail"] = !book.BorrowerId.Has()
+	if (book.BorrowerId.Has()) {
+		UID, _ := book.BorrowerId.Get()
+		acc, ok := IDToAccount.Get(UID)
+		if (!ok) {
+			binfo["borrower_error"] = "Can't find borrower account"
+			binfo["borrower_name"] = "?"
+			binfo["borrower_email"] = "?"
+		} else {
+			binfo["borrower_name"] = acc.Name
+			binfo["borrower_email"] = acc.Email
+		}
+
+		days, past := book.UntilFree().Unpack()
+		binfo["borrower_past"] = past
+		binfo["borrower_days_left"] = days
+	}
+	return true, binfo
+}
+
+func addBook(w HttpWriter, r HttpReq, info map[string]any) (bool, any) {
+	accid := info["acc"].(map[string]any)["id"].(int64)
+	inf := AttachAccountInfo.GetI(accid)
+	isWorker := inf.GetI("lsys.is_worker").(int64)
+	if (isWorker == 0) {
+		DocError.Render(w, "Only workers can add books")
+		return false, nil
+	}
+	if (r.Method=="POST") {
+
+		r.ParseForm()
+		ISBN_s := r.FormValue("ISBN")
+		ISBN, e := strconv.ParseUint(ISBN_s, 10, 64)
+		if (e != nil) {
+			DocError.Render(w, e)
+			return false, nil
+		}
+
+		name := r.FormValue("name")
+		pubdate := r.FormValue("published")
+		ID_s, e := sql_add_book(ISBN_s, name, pubdate)
+		ID:=uint64(ID_s) // signed -> unsigned
+
+		if (e != nil) {
+			DocError.Render(w, e)
+			return false, nil
+		}
+
+		b := Book{
+			ISBN, ID, name,
+			pubdate,
+			OptPtr[time.Time](nil),
+			OptPtr[int64](nil),
+		}
+		AvaliableBooks.Set(ID, b)
+		AllBooks.Set(ID, b)
+		// redirect to book page
+		ID_str := strconv.FormatUint(ID, 10)
+		http.Redirect(w, r, "/lsys/book?bid="+ID_str, http.StatusSeeOther)
+	}
+	return true, nil
+}
 
 func sql_load(db *sql.DB) error {
 	rows, e := SQLGet("lsys.sql_load # get authors", `SELECT id, name FROM authors;`)
@@ -82,14 +194,12 @@ func sql_load(db *sql.DB) error {
 			ISBN uint64
 			ID uint64
 			Name string
-			Published_s string
+			Published string
 			LastBorrow_s_o *string
-			BorrowerId_o *uint64
+			BorrowerId_o *int64
 		)
 
-		e := rows.Scan( &ISBN, &ID, &Name, &Published_s, &LastBorrow_s_o, &BorrowerId_o )
-		if (e != nil) {return e}
-		Published, e := ParseTime(Published_s)
+		e := rows.Scan( &ISBN, &ID, &Name, &Published, &LastBorrow_s_o, &BorrowerId_o )
 		if (e != nil) {return e}
 		LastBorrow_s := OptPtr(LastBorrow_s_o)
 		LastBorrow, _ := OptMapFal(LastBorrow_s, ParseTime)
@@ -127,12 +237,25 @@ func sql_load(db *sql.DB) error {
 	return nil
 }
 
+func sql_add_book(ISBN, name string, published string) (int64, error) {
+	res, e := SQLDo("lsys add book", `
+INSERT INTO books
+	(ISBN, name, published)
+VALUES
+	(?, ?, ?)
+`, ISBN, name, published)
+	if (e != nil) {return 0, e}
+	return res.LastInsertId()
+}
+
 func init() {
 	AvaliableBooks.Init()
 	AllBooks.Init()
 	IDToAuthor.Init()
 	AuthorToId.Init()
 	Borrows.Init()
+
+	AttachInfo("lsys", "is_worker", "BOOL NOT NULL DEFAULT FALSE")
 
 	SQLInitScript( "lsys schema", sql_schema )
 	SQLInitFunc( "lsys load", sql_load)
@@ -169,4 +292,18 @@ CREATE TABLE IF NOT EXISTS borrowed (
 	FOREIGN KEY(user_id) REFERENCES accounts(id),
 	FOREIGN KEY(book_id) REFERENCES books(id)
 );
+
+CREATE TABLE IF NOT EXISTS borrow_log (
+	user_id INTEGER NOT NULL,
+	book_id INTEGER NOT NULL,
+	borrow_time TEXT NOT NULL,
+	return_time TEXT NOT NULL,
+	CHECK(borrow_time != return_time),
+	UNIQUE(borrow_time, user_id, book_id),
+	UNIQUE(return_time, user_id, book_id),
+	FOREIGN KEY(user_id) REFERENCES accounts(id),
+	FOREIGN KEY(book_id) REFERENCES books(id)
+);
 `
+//TODO: ISBN -> "cover art".webp table
+
