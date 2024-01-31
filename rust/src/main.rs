@@ -3,13 +3,16 @@
 
 mod sql;
 use axum::{
+	Form,
 	routing::get,
-	Extension,
-	//extract::State,
+	extract::State,
 };
-//use axum::Form;
 use maud::{html, Markup};
 use sqlx::sqlite::SqlitePoolOptions;
+use std::cell::Cell;
+use tokio::sync::Mutex;
+use std::sync::Arc;
+use serde::Deserialize;
 
 #[tokio::main]
 async fn main() {
@@ -24,96 +27,108 @@ async fn main() {
 		.connect(&db_connection_str).await
 		.expect("can't connect to database");
 
-
 	sqlx::query(sql::TABLE_SCHEMA)
 		.execute(&pool).await
 		.expect("can't setup database schema");
 
-	let sst = Arc::new(
-		Mutex::new(
-			ServerState{db: pool, visits: 0}
-		)
-	);
-	//let sst = ServerState{db: pool, visits: 0};
 	let app = axum::Router::new()
-		.route("/", get(display_search) )
-		.route("/list", get(display_all) )
-		.layer(Extension(sst));
+		.route("/", get(display_all) )
+		.route("/login", get(display_login).post(perform_login) )
+		.with_state(new_shared_state(pool).await);
 
 	let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
 	axum::serve(listener, app).await.unwrap();
 }
 
-//use std::pin::Pin;
-use tokio::sync::Mutex;
-use std::sync::{Arc};
-
 type SharedState = Arc<Mutex<ServerState>>;
+
+async fn new_shared_state(db: sqlx::Pool<sqlx::Sqlite>) -> SharedState {
+	let books = sqlx::query_as!(
+		BookQuery,
+		"SELECT time, is_borrow, id, ISBN, name, published, user_id FROM books;"
+	).fetch_all(&db).await.expect("can't parse row from books into BookQuery");
+
+	let books:Vec<Book> = books.iter()
+		.map(Book::from_query)
+		.collect();
+
+	Arc::new( Mutex::new(
+		ServerState{
+			db,
+			books,
+		}
+	))
+}
+
+#[derive(Deserialize, Debug)]
+struct FormLogIn {
+	email: String,
+	pass: String,
+}
+
+async fn perform_login( Form(login): Form<FormLogIn> ) -> Markup {
+	println!("{:b}", hash(login.pass.as_bytes()));
+
+	html! {}
+}
+
+async fn display_login() -> Markup {
+	html! { body {
+		form method="POST" action="login" {
+			input name="email" type="email" placeholder="email" {}
+			input name="pass" type="password" placeholder="password" {}
+			button { "LogIn" }
+		}
+	} }
+}
+
+#[derive(Deserialize, Debug)]
+struct FormRegister {
+	name: String,
+	email: String,
+	pass: u64, // .as_bytes()
+}
+
+async fn register(Form(register): Form<FormRegister>) -> Markup {
+	println!("{register:#?}");
+	html! {}
+}
 
 #[derive(Clone)]
 struct ServerState {
 	db: sqlx::Pool<sqlx::Sqlite>,
-	visits: u64,
+	books: Vec<Book>,
 }
 
-use axum::debug_handler;
-#[debug_handler]
-async fn display_all(
-	state: Extension<SharedState>
-) -> Markup {
-	//let stt = &state.lock().unwrap().db;
-	////let mut state = state_rw.write().unwrap();
-	//let book = sqlx::query!("SELECT * FROM books;")
-	//	.fetch_one(stt).await
-	//	.unwrap();
-	//println!("{book:#?}");
-	let mut stt = state.lock().await;
-	stt.visits += 1;
+async fn display_all( State(stt): State<SharedState>) -> Markup {
+	let state = stt.lock().await;
+	let books = &state.books;
 
-	html! {body{
-		h1 { "hi" }
-		h1 { "we've had " (stt.visits) " hits to this page" }
-	}}
+	html! { body{
+		table {
 
-	//html! { body{
-	//	table {
+			thead{ tr {
+				td { "ISBN" }
+				td { "Name" }
+				td { "Authors" }
+				td { "Published Date" }
+			} }
 
-	//		thead{ tr {
-	//			td { "ISBN" }
-	//			td { "Name" }
-	//			td { "Authors" }
-	//			td { "Published Date" }
-	//		} }
-
-	//		tbody{
-	//			@for book in &books {
-	//				tr{
-	//					th { (book.ISBN) }
-	//					td { (book.name) }
-	//					td { ("idk") }
-	//					td { (book.published.to_str_split("/")) }
-	//				}
-	//			}
-	//		}
-	//	}
-	//} }
-}
-
-async fn display_search() -> Markup {
-	html! { head{
-		script src="https://unpkg.com/htmx.org@1.9.10" {}
-	}
-	body{
-		form hx-get="/search" hx-target="#rser" hx-swap="innerHTML" {
-			input name="ISBN" type="number" { }
-			input name="name" type="string" { }
-			button { "enviar" }
+			tbody{
+				@for book in books {
+					tr{
+						th { (book.ISBN) }
+						td { (book.name) }
+						td { ("idk") }
+						td { (book.published) }
+					}
+				}
+			}
 		}
-		div id="rser" { }
 	} }
 }
 
-type UID = u64;
+type UID = i64;
 #[derive(Debug)]
 struct Account {
 	uid: UID,
@@ -122,31 +137,76 @@ struct Account {
 	pass_hash: String,
 }
 
-#[derive(Debug, Clone)]
-enum Status {
-	Reserved(UID),
-	Borrowed(UID),
+#[derive(Debug, Clone, Copy)]
+enum BorrowStatus { Reserved, Borrowed }
+impl BorrowStatus {
+	pub fn from(is_borrow: bool) -> Self {
+		if is_borrow {
+			BorrowStatus::Borrowed
+		} else {
+			BorrowStatus::Reserved
+		}
+	}
+}
+#[derive(Debug, Clone, Copy)]
+struct BookStatus {
+	uid: UID,
+	time: chrono::NaiveDate,
+	status: BorrowStatus,
 }
 
-type BID = u64;
+type BID = i64;
 #[derive(Debug, Clone)]
-#[allow(non_snake_case, dead_code)] // for ISBN
+#[allow(non_snake_case)]
 struct Book {
-	ISBN: u64,
+	ISBN: i64,
 	bid: BID,
-
 	name: String,
 	authors: Vec<String>,
 	published: String,
+	status: Option<Cell<BookStatus>>,
+}
+#[allow(non_snake_case)]
+#[derive(Debug, Clone)]
+struct BookQuery {
+	ISBN: i64,
+	id: BID,
 
-	status: Option<Status>,
-	borrower_id: Option<u64>, // ID of current borrower
+	name: String,
+	published: String,
+	user_id: Option<UID>,
+	time: Option<chrono::NaiveDate>,
+	is_borrow: Option<bool>,
 }
 
-//impl Book {
+impl Book {
+	pub fn from_query(info: &BookQuery) -> Self {
+		// should not fail, since or is_borrow is NULL and time & user_id are also
+		// or is_borrow is Some() and so are time & user_id
+		let status = if let Some(is_borrow) = info.is_borrow {
+			Some(
+				Cell::new(BookStatus{
+					uid: info.user_id.unwrap(),
+					time: info.time.unwrap(),
+					status: BorrowStatus::from(is_borrow),
+				})
+			)
+		} else {
+			None
+		};
+		Book{
+			ISBN: info.ISBN.clone(),
+			bid: info.id.clone(),
+			name: info.name.clone(),
+			authors: Vec::new(),
+			published: info.published.clone(),
+			status: status,
+		}
+	}
+
 //	pub fn new(
 //		db: &sql::DB,
-//		ISBN: u64, name: String,
+//		ISBN: i64, name: String,
 //		authors: Vec<String>, published: time::Date
 //	) -> Result<Book, rusqlite::Error> {
 //		// TODO authors in sql too!
@@ -161,7 +221,7 @@ struct Book {
 //
 //	fn add_to_db(
 //		db: &sql::DB,
-//		ISBN: u64, name: &str, published: time::Date
+//		ISBN: i64, name: &str, published: time::Date
 //	) -> Result<i64, rusqlite::Error> {
 //		db.insert(r#"
 //INSERT INTO books
@@ -173,5 +233,14 @@ struct Book {
 //			published,
 //		))
 //	}
-//}
+}
+
+// djb2
+fn hash(st: &[u8]) -> i64 {
+	let mut hash: i64 = 5381;
+	for chr in st {
+		hash = 33*hash+(*chr as i64);
+	}
+	hash
+}
 
