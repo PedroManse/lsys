@@ -1,78 +1,94 @@
-pub struct DB(rusqlite::Connection);
+/*
+DROP TABLE IF EXISTS borrow_log;
+DROP TABLE IF EXISTS status;
+DROP TABLE IF EXISTS wrote;
+DROP TABLE IF EXISTS authors;
+DROP TABLE IF EXISTS books;
+DROP TABLE IF EXISTS accounts;
+*/
 
-pub fn open(path: &str) -> Result<DB, rusqlite::Error> {
-	if path==":memory:" {
-		rusqlite::Connection::open_in_memory().map(|con|DB(con))
-	} else {
-		rusqlite::Connection::open(path).map(|con|DB(con))
-	}
-}
+pub const TABLE_SCHEMA: &str = r#"
 
-#[allow(dead_code)]
-impl DB {
-	pub fn schema(&self, command: &str) -> Result<usize, rusqlite::Error> {
-		self.0.execute(command, ())
-	}
-
-	// on Ok returns number of rows edited
-	pub fn exec<P: rusqlite::Params>(&self, command: &str, params: P) -> Result<usize, rusqlite::Error> {
-		self.0.prepare_cached(command)?.execute(params)
-	}
-
-	// on Ok returns last insert id
-	pub fn insert<P: rusqlite::Params>(&self, command: &str, params: P) -> Result<i64, rusqlite::Error> {
-		self.0.prepare_cached(command)?.insert(params)
-	}
-
-	pub fn last_insert_id(&self) -> i64 {
-		self.0.last_insert_rowid()
-	}
-
-	pub fn close(self) -> Result<(), (DB, rusqlite::Error)> {
-		self.0.close().map_err(|(con, e)| (DB(con), e) )
-	}
-
-	pub fn prepare(&self, command: &str) -> Result<rusqlite::CachedStatement, rusqlite::Error> {
-		self.0.prepare_cached(command)
-	}
-}
-
-pub const SQL_TABLE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS accounts (
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	email TEXT NOT NULL,
+	pass TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS books (
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	ISBN INTEGER NOT NULL,
-	book_id INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL,
-	published DATE NOT NULL,
-	last_borrow DATE,
-	borrower_id INTEGER
+	published TEXT NOT NULL,
+	user_id INTEGER DEFAULT NULL,
+	time TEXT DEFAULT NULL,
+	is_borrow BOOL DEFAULT NULL,
+	CHECK((time IS NULL) == (user_id IS NULL)),
+	CHECK((time IS NULL) == (is_borrow IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS authors (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	name TEXT NOT NULL
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL UNIQUE
 );
-
-CREATE TABLE IF NOT EXISTS user (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	name TEXT NOT NULL,
-	email TEXT NOT NULL,
-)
 
 CREATE TABLE IF NOT EXISTS wrote (
 	author_id INTEGER NOT NULL,
-	book_id INTEGER NOT NULL,
-	UNIQUE(author_id, book_id),
+	ISBN INTEGER NOT NULL,
+	UNIQUE(author_id, ISBN),
 	FOREIGN KEY(author_id) REFERENCES authors(id),
 	FOREIGN KEY(ISBN) REFERENCES books(ISBN)
 );
 
-CREATE TABLE IF NOT EXISTS borrows (
+CREATE TABLE IF NOT EXISTS borrow_log (
 	user_id INTEGER NOT NULL,
 	book_id INTEGER NOT NULL,
-	UNIQUE(user_id, book_id),
-	FOREIGN KEY(user_id) REFERENCES users(id),
-	FOREIGN KEY(ISBN) REFERENCES books(ISBN)
-)
+	borrow_time TEXT NOT NULL,
+	return_time TEXT NOT NULL,
+	CHECK(borrow_time != return_time),
+	UNIQUE(borrow_time, user_id, book_id),
+	UNIQUE(return_time, user_id, book_id),
+	FOREIGN KEY(user_id) REFERENCES accounts(id),
+	FOREIGN KEY(book_id) REFERENCES books(id)
+);
 
 "#;
+
+/*
+
+[worker] create new book
+INSERT INTO books
+	(ISBN, name, published)
+VALUES
+	(?, ?, ?);
+
+[user] reserve book
+UPDATE books SET
+	(user_id, time, is_borrow)
+VALUES
+	(?, ?, false);
+
+[worker] borrow book -- as per user reservation
+UPDATE books SET
+	(time, is_borrow)
+VALUES
+	(?, true)
+WHERE
+	(book_id == ?);
+
+[worker] return book -- as per user IRL action
+UPDATE books SET
+	(user_id, time, is_borrow)
+VALUES
+	(NULL, NULL, NULL)
+WHERE
+	(book_id == ?);
+
+[server] get books
+SELECT
+	id, ISBN, name, published, user_id, time, is_borrow
+FROM
+	books;
+
+*/

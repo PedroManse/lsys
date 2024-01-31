@@ -1,69 +1,102 @@
+#![allow(dead_code)]
 // library system
 
-mod time;
 mod sql;
-//mod client {}
-//mod worker {}
-
-use std::str::FromStr;
-
 use axum::{
 	routing::get,
-	extract::Query,
+	Extension,
+	//extract::State,
 };
 //use axum::Form;
 use maud::{html, Markup};
-use serde::Deserialize;
+use sqlx::sqlite::SqlitePoolOptions;
 
 #[tokio::main]
 async fn main() {
-	let conn = sql::open("db").unwrap();
-	conn.schema(sql::SQL_TABLE_SCHEMA).unwrap();
+	dotenvy::dotenv().unwrap();
+	let db_connection_str = std::env::var("DATABASE_URL")
+		.expect("DATABASE_URL not set in env");
 
-	//let pub_date = ex(time::Date::from_str("1-12-1887"))?;
-	//let b = ex(Book::new(&conn, 9780140439083, "A Study In Scarlet".to_string(), vec![], pub_date))?;
+	// set up connection pool
+	let pool = SqlitePoolOptions::new()
+		.max_connections(5)
+		.acquire_timeout(std::time::Duration::from_secs(3))
+		.connect(&db_connection_str).await
+		.expect("can't connect to database");
 
-	//let mut stmt = conn.prepare("SELECT * FROM books").unwrap();
-	//let rows = stmt.query_map([], Book::from_query).unwrap();
-	//let bks: Vec<Book> = rows.filter(|a|a.is_ok()).map(|b|b.unwrap()).collect();
 
+	sqlx::query(sql::TABLE_SCHEMA)
+		.execute(&pool).await
+		.expect("can't setup database schema");
+
+	let sst = Arc::new(
+		Mutex::new(
+			ServerState{db: pool, visits: 0}
+		)
+	);
+	//let sst = ServerState{db: pool, visits: 0};
 	let app = axum::Router::new()
 		.route("/", get(display_search) )
 		.route("/list", get(display_all) )
-		.route("/search", get(perform_search) );
+		.layer(Extension(sst));
 
 	let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
 	axum::serve(listener, app).await.unwrap();
 }
 
-async fn display_all() -> Markup {
-	let conn = sql::open("db").unwrap();
-	let mut stmt = conn.prepare("SELECT * FROM books").unwrap();
-	let rows = stmt.query_map([], Book::from_query).unwrap();
-	let books: Vec<Book> = rows.filter(|a|a.is_ok()).map(|b|b.unwrap()).collect();
+//use std::pin::Pin;
+use tokio::sync::Mutex;
+use std::sync::{Arc};
 
-	html! { body{
-		table {
+type SharedState = Arc<Mutex<ServerState>>;
 
-			thead{ tr {
-				td { "ISBN" }
-				td { "Name" }
-				td { "Authors" }
-				td { "Published Date" }
-			} }
+#[derive(Clone)]
+struct ServerState {
+	db: sqlx::Pool<sqlx::Sqlite>,
+	visits: u64,
+}
 
-			tbody{
-				@for book in &books {
-					tr{
-						th { (book.ISBN) }
-						td { (book.name) }
-						td { ("idk") }
-						td { (book.published.to_str_split("/")) }
-					}
-				}
-			}
-		}
-	} }
+use axum::debug_handler;
+#[debug_handler]
+async fn display_all(
+	state: Extension<SharedState>
+) -> Markup {
+	//let stt = &state.lock().unwrap().db;
+	////let mut state = state_rw.write().unwrap();
+	//let book = sqlx::query!("SELECT * FROM books;")
+	//	.fetch_one(stt).await
+	//	.unwrap();
+	//println!("{book:#?}");
+	let mut stt = state.lock().await;
+	stt.visits += 1;
+
+	html! {body{
+		h1 { "hi" }
+		h1 { "we've had " (stt.visits) " hits to this page" }
+	}}
+
+	//html! { body{
+	//	table {
+
+	//		thead{ tr {
+	//			td { "ISBN" }
+	//			td { "Name" }
+	//			td { "Authors" }
+	//			td { "Published Date" }
+	//		} }
+
+	//		tbody{
+	//			@for book in &books {
+	//				tr{
+	//					th { (book.ISBN) }
+	//					td { (book.name) }
+	//					td { ("idk") }
+	//					td { (book.published.to_str_split("/")) }
+	//				}
+	//			}
+	//		}
+	//	}
+	//} }
 }
 
 async fn display_search() -> Markup {
@@ -80,97 +113,65 @@ async fn display_search() -> Markup {
 	} }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[allow(non_snake_case, dead_code)] // for ISBN
-pub struct BookQuery {
-	ISBN: Option<String>,
-	name: Option<String>,
+type UID = u64;
+#[derive(Debug)]
+struct Account {
+	uid: UID,
+	name: String,
+	email: String,
+	pass_hash: String,
 }
 
-async fn perform_search(Query(qry): Query<BookQuery>) -> Markup {
-	println!("{:?}", qry);
-
-	html! {
-		table {
-			thead {
-				tr{
-					th { "ISBN" }
-					th { "Name" }
-					th { "Authors" }
-					th { "Date" }
-				}
-			}
-			tbody {
-				tr{
-					td {({ qry.ISBN.map(|i|i.to_string()).unwrap_or("Undefined".to_string()) })}
-					td {({ qry.name.unwrap_or("Undefined".to_string()) })}
-				}
-			}
-		}
-	}
+#[derive(Debug, Clone)]
+enum Status {
+	Reserved(UID),
+	Borrowed(UID),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+type BID = u64;
+#[derive(Debug, Clone)]
 #[allow(non_snake_case, dead_code)] // for ISBN
-pub struct Book {
+struct Book {
 	ISBN: u64,
-	internal_id: i64,
+	bid: BID,
 
 	name: String,
 	authors: Vec<String>,
-	published: time::Date,
+	published: String,
 
-	last_borrow: Option<time::Date>,
+	status: Option<Status>,
 	borrower_id: Option<u64>, // ID of current borrower
 }
 
-impl Book {
-	pub fn from_query(query: &rusqlite::Row) -> Result<Book, rusqlite::Error> {
-		let ISBN:u64 = query.get(0)?;
-		let internal_id:i64 = query.get(1)?;
-		let name:String = query.get(2)?;
-		let authors = vec![]; // TODO read authors
-		let pub_date:String = query.get(3)?;
-		let published = time::Date::from_str(&pub_date).map_err(|_|rusqlite::Error::InvalidQuery)?;
-		let last_borrow_date:Option<String> = query.get(4)?;
-		let last_borrow = last_borrow_date.map(|b_date|time::Date::from_str(&b_date).unwrap());
-		let borrower_id:Option<u64> = query.get(5)?;
-
-		Ok(Book{
-			ISBN, internal_id, name,
-			authors, published,
-			last_borrow, borrower_id,
-		})
-	}
-
-	pub fn new(
-		db: &sql::DB,
-		ISBN: u64, name: String,
-		authors: Vec<String>, published: time::Date
-	) -> Result<Book, rusqlite::Error> {
-		// TODO authors in sql too!
-		let internal_id = Book::add_to_db(db, ISBN, &name, published)?;
-
-		Ok(Book{
-			ISBN, internal_id, name,
-			authors, published,
-			last_borrow: None, borrower_id: None,
-		})
-	}
-
-	fn add_to_db(
-		db: &sql::DB,
-		ISBN: u64, name: &str, published: time::Date
-	) -> Result<i64, rusqlite::Error> {
-		db.insert(r#"
-INSERT INTO books
-	(ISBN, name, published)
-VALUES
-	(?, ?, ?)
-		"#, (
-			ISBN, name,
-			published,
-		))
-	}
-}
+//impl Book {
+//	pub fn new(
+//		db: &sql::DB,
+//		ISBN: u64, name: String,
+//		authors: Vec<String>, published: time::Date
+//	) -> Result<Book, rusqlite::Error> {
+//		// TODO authors in sql too!
+//		let internal_id = Book::add_to_db(db, ISBN, &name, published)?;
+//
+//		Ok(Book{
+//			ISBN, internal_id, name,
+//			authors, published,
+//			last_borrow: None, borrower_id: None,
+//		})
+//	}
+//
+//	fn add_to_db(
+//		db: &sql::DB,
+//		ISBN: u64, name: &str, published: time::Date
+//	) -> Result<i64, rusqlite::Error> {
+//		db.insert(r#"
+//INSERT INTO books
+//	(ISBN, name, published)
+//VALUES
+//	(?, ?, ?)
+//		"#, (
+//			ISBN, name,
+//			published,
+//		))
+//	}
+//}
 
