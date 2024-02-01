@@ -11,5 +11,8 @@ maud = { version = "0.26.0", features = ["axum"] }
 serde = { version = "1.0.196", features = ["derive"] }
 sqlx = { version = "0.7.3", features = ["time", "chrono", "sqlite", "runtime-tokio"] }
 tokio = { version = "1.35.1", features = ["rt-multi-thread"] }
+tower-cookies = "0.10.0"
 
-
+[dependencies.uuid]
+version = "1.7.0"
+features = ["v4", "fast-rng", "macro-diagnostics", "v3"]
