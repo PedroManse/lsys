@@ -1,14 +1,3 @@
-/*
-DROP TABLE IF EXISTS borrow_log;
-DROP TABLE IF EXISTS status;
-DROP TABLE IF EXISTS wrote;
-DROP TABLE IF EXISTS authors;
-DROP TABLE IF EXISTS books;
-DROP TABLE IF EXISTS accounts;
-*/
-
-pub const TABLE_SCHEMA: &str = r#"
-
 CREATE TABLE IF NOT EXISTS accounts (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL,
@@ -53,43 +42,3 @@ CREATE TABLE IF NOT EXISTS borrow_log (
 	FOREIGN KEY(user_id) REFERENCES accounts(id),
 	FOREIGN KEY(book_id) REFERENCES books(id)
 );
-
-"#;
-
-/*
-
-[worker] create new book
-INSERT INTO books
-	(ISBN, name, published)
-VALUES
-	(?, ?, ?);
-
-[user] reserve book
-UPDATE books SET
-	(user_id, time, is_borrow)
-VALUES
-	(?, ?, false);
-
-[worker] borrow book -- as per user reservation
-UPDATE books SET
-	(time, is_borrow)
-VALUES
-	(?, true)
-WHERE
-	(book_id == ?);
-
-[worker] return book -- as per user IRL action
-UPDATE books SET
-	(user_id, time, is_borrow)
-VALUES
-	(NULL, NULL, NULL)
-WHERE
-	(book_id == ?);
-
-[server] get books
-SELECT
-	id, ISBN, name, published, user_id, time, is_borrow
-FROM
-	books;
-
-*/

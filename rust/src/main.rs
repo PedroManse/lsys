@@ -1,14 +1,13 @@
 #![allow(dead_code)]
 // library system
 
-mod sql;
 use axum::{
 	Form,
 	routing::get,
 	extract::State,
 };
 use maud::{html, Markup};
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::SqlitePoolOptions;;
 use std::cell::Cell;
 use tokio::sync::Mutex;
 use std::sync::Arc;
@@ -26,10 +25,6 @@ async fn main() {
 		.acquire_timeout(std::time::Duration::from_secs(3))
 		.connect(&db_connection_str).await
 		.expect("can't connect to database");
-
-	sqlx::query(sql::TABLE_SCHEMA)
-		.execute(&pool).await
-		.expect("can't setup database schema");
 
 	let app = axum::Router::new()
 		.route("/", get(display_all) )
@@ -244,3 +239,40 @@ fn hash(st: &[u8]) -> i64 {
 	hash
 }
 
+/*
+
+[worker] create new book
+INSERT INTO books
+	(ISBN, name, published)
+VALUES
+	(?, ?, ?);
+
+[user] reserve book
+UPDATE books SET
+	(user_id, time, is_borrow)
+VALUES
+	(?, ?, false);
+
+[worker] borrow book -- as per user reservation
+UPDATE books SET
+	(time, is_borrow)
+VALUES
+	(?, true)
+WHERE
+	(book_id == ?);
+
+[worker] return book -- as per user IRL action
+UPDATE books SET
+	(user_id, time, is_borrow)
+VALUES
+	(NULL, NULL, NULL)
+WHERE
+	(book_id == ?);
+
+[server] get books
+SELECT
+	id, ISBN, name, published, user_id, time, is_borrow
+FROM
+	books;
+
+*/
