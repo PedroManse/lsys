@@ -115,7 +115,7 @@ async fn new_shared_state(db: sqlx::Pool<sqlx::Sqlite>) -> SharedState {
 
 	let books = sqlx::query_as!(
 		BookQuery,
-		"SELECT time, is_borrow, id, ISBN, name, published, user_id FROM books;"
+		"SELECT * FROM books INNER JOIN book_info USING(ISBN);"
 	).fetch_all(&db).await.expect("can't parse row from books into BookQuery");
 
 	let mut bid_to_book = HashMap::new();
@@ -140,6 +140,63 @@ async fn new_shared_state(db: sqlx::Pool<sqlx::Sqlite>) -> SharedState {
 
 
 	Arc::new( tokio::sync::Mutex::new( state ))
+}
+
+async fn reserve_book(
+	State(stt): State<SharedState>,
+	cookies: Cookies,
+	Form(reserve): Form<ReserveBookForm>
+) -> Result<Markup, Redirect> {
+	let state = Arc::clone(&stt);
+	let state = state.lock().await;
+
+	let loginback = Redirect::to(format!("/login?goto=/book?bid={}", reserve.bid).as_str());
+	let acc = cookies.get(COOKIE_UUID_NAME).ok_or(loginback.clone())?;
+	let acc = acc.value().to_owned();
+	let acc = Uuid::parse_str(&acc).or(Err(loginback.clone()))?;
+	let acc = state.uuid_to_account.get(&acc).ok_or(loginback)?;
+
+	let book = state.bid_to_book.get(&reserve.bid);
+	Ok( match book {
+		Some(book)=>view_reserve_book(book),
+		None=>view_404(format!("/reserve?bid={}", reserve.bid)),
+	} )
+}
+
+/*
+	let loginback = Redirect::to(url.as_str());
+	let state = Arc::clone(&stt);
+	let state = state.lock().await;
+	let acc = {
+		let acc = cookies.get(COOKIE_UUID_NAME).ok_or(loginback.clone())?;
+		let acc = acc.value().to_owned();
+		let acc = Uuid::parse_str(&acc).or(Err(loginback.clone()))?;
+		state.uuid_to_account.get(&acc).ok_or(loginback)?
+	};
+*/
+
+async fn peform_reserve(
+	State(stt): State<SharedState>,
+	cookies: Cookies,
+	Form(reserve): Form<ReserveBookForm>
+) -> Result<Markup, Redirect> {
+	let url = format!("/login?goto=/book?bid={}", reserve.bid);
+
+	let loginback = Redirect::to(url.as_str());
+	let state = Arc::clone(&stt);
+	let state = state.lock().await;
+	let acc = {
+		let acc = cookies.get(COOKIE_UUID_NAME).ok_or(loginback.clone())?;
+		let acc = acc.value().to_owned();
+		let acc = Uuid::parse_str(&acc).or(Err(loginback.clone()))?;
+		state.uuid_to_account.get(&acc).ok_or(loginback)?
+	};
+
+	let book = state.bid_to_book.get(&reserve.bid);
+	Ok( match book {
+		Some(book)=>view_reserve_book(book),
+		None=>view_404(format!("/reserve?bid={}", reserve.bid)),
+	} )
 }
 
 #[debug_handler]
@@ -178,15 +235,14 @@ async fn display_book(
 	cookies: Cookies,
 	Query(bid): Query<BookParam>,
 ) -> Result<Markup, Redirect> {
+	let loginback = Redirect::to(format!("/login?goto=/book?bid={}", bid.bid).as_str());
 	let state = Arc::clone(&stt);
 	let state = state.lock().await;
 
-	//TODO set goto
-	let acc = cookies.get(COOKIE_UUID_NAME).ok_or(Redirect::to("/login"))?;
+	let acc = cookies.get(COOKIE_UUID_NAME).ok_or(loginback.clone())?;
 	let acc = acc.value().to_owned();
-	let acc = Uuid::parse_str(&acc).or(Err(Redirect::to("/login")))?;
-	state.uuid_to_account.get(&acc).ok_or(Redirect::to("/login"))?;
-	println!("{bid:#?}");
+	let acc = Uuid::parse_str(&acc).or(Err(loginback.clone()))?;
+	state.uuid_to_account.get(&acc).ok_or(loginback)?;
 
 	let req_book = state.bid_to_book.get(&bid.bid);
 
@@ -230,7 +286,6 @@ async fn perform_register(
 			.http_only(true).into()
 	);
 	Account::update_maps(&mut state, acc);
-	println!("{state:#?}");
 
 	Ok( Redirect::to("/") )
 }
@@ -390,6 +445,12 @@ fn view_404(query: String) -> Markup {
 	} }
 }
 
+fn view_reserve_book(book: &Book) -> Markup {
+	html! { (DOCTYPE) body {
+		h1 { "TODO" }
+	} }
+}
+
 fn view_book(book: Book) -> Markup {
 	html!{ (DOCTYPE) head {
 		meta charset="UTF-8"{}
@@ -410,10 +471,11 @@ fn view_book(book: Book) -> Markup {
 
 			section {
 				@if book.status.is_some() {
-					p {"LOSER"}
+					//TODO!
+					p {"LOSER!"}
 				} @ else {
-					form method="POST" action={"/reserve?bid="(book.ISBN)}{
-						button { }
+					form method="GET" action={"/reserve?bid="(book.bid)}{
+						button { "Reserve" }
 					}
 				}
 			}
@@ -504,12 +566,6 @@ VALUES
 	(NULL, NULL, NULL)
 WHERE
 	(book_id == ?);
-
-[server] get books
-SELECT
-	id, ISBN, name, published, user_id, time, is_borrow
-FROM
-	books;
 */
 
 #[derive(Deserialize, Debug)]
@@ -554,7 +610,6 @@ struct BookStatus {
 	status: BorrowStatus,
 }
 
-
 type AID = i64;
 #[derive(Debug, Clone)]
 struct Author {
@@ -589,12 +644,15 @@ struct NewBookForm {
 	published: String,
 }
 
+struct ReserveBookForm {
+	bid: BID,
+}
+
 #[allow(non_snake_case)]
 #[derive(Debug, Clone)]
 struct BookQuery {
 	ISBN: ISBN,
 	id: BID,
-
 	name: String,
 	published: String,
 	user_id: Option<UID>,

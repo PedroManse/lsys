@@ -58,32 +58,36 @@ CREATE TABLE IF NOT EXISTS borrow_log (
 INSERT INTO book_info
 	(ISBN, name, published)
 VALUES
-	(3,"A Study In Scarlet","1878"),
-	(4,"Foundation","1998"),
-	(5,"The Raven","1978"),
-	(6,"The Black Cat","1978");
+	(1499669402, "A Study In Scarlet", "1878"),
+	(0553293354, "Foundation"        , "1998"),
+	(0000000005, "The Raven"         , "1978"),
+	(0000000006, "The Black Cat"     , "1978");
 
--- Could to info, ISBN -> (name, published)
--- instead of keeping the same value in _every_ book
 INSERT INTO books
-	(id, ISBN)
+	(ISBN)
 VALUES
-	(1,3), (2,3), (3,3),
-	(4,4), (5,5), (6,6),
-	(7,6), (8,3);
+	(1499669402), (1499669402), (1499669402),
+	(0553293354), (0000000005), (0000000006),
+	(0000000006), (1499669402), (0553293354);
 
 INSERT INTO authors
 	(id, name)
 VALUES
 	(1, "Edgar Allan Poe"),
-	(2, "Isac Asimov"),
+	(2, "Isaac Asimov"),
 	(3, "Arthur Conan Doyle");
 
 INSERT INTO wrote
-	(author_id, ISBN)
+	(ISBN, author_id)
 VALUES
-	(3, 3),
-	(2, 4),
-	(3, 4),
-	(1, 5),
-	(1, 6);
+	(0000000005, 1),
+	(0000000006, 1),
+	(0553293354, 2),
+	(1499669402, 3),
+	(0553293354, 3);
+
+INSERT INTO accounts
+	(name,email,pass_hash,is_worker)
+VALUES
+	('manse','pmanse@lsys.com','a6f85bd2-a2a5-360b-a4e4-13b8eb84b14e',true),
+	('manse','pedro@manse.com','a6f85bd2-a2a5-360b-a4e4-13b8eb84b14e',false);
