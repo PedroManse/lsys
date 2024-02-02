@@ -250,19 +250,26 @@ fn view_login(log_error: &str, reg_error: &str, goto: &str) -> Markup {
 	html! { body {
 		p style="color: red;"{(log_error)}
 
-		//TODO escape goto
-		form method="POST" action=({format!("login?goto=/{goto}")}) {
-			input name="email" type="email" placeholder="email" {}
-			input name="pass" type="password" placeholder="password" {}
+		form method="POST" action=({format!("login?goto={goto}")}) {
+			label for="login-email" {"Email:"}
+			input id="login-email" name="email" type="email" placeholder="email" {}
+			"  "
+			label for="login-pass" {"Password:"}
+			input id="login-pass" name="pass" type="password" placeholder="password" {}
 			button { "LogIn" }
 		}
 
 		p style="color: red;"{(reg_error)}
-		form method="POST" action="register" {
-			input name="name" type="text" placeholder="username" {}
-			input name="email" type="email" placeholder="email" {}
-			input name="pass" type="password" placeholder="password" {}
-			button { "LogIn" }
+		form method="POST" action=({format!("register?goto=/{goto}")}) {
+			label for="register-username" {"User Name:"}
+			input id="register-username" name="name" type="text" placeholder="username" {}
+			"  "
+			label for="register-email" {"Email:"}
+			input id="register-email" name="email" type="email" placeholder="email" {}
+			"  "
+			label for="register-password" {"Password:"}
+			input id="register-password" name="pass" type="password" placeholder="password" {}
+			button { "Register" }
 		}
 	} }
 }
