@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 #![allow(dead_code)]
 // library system
 
@@ -11,7 +12,7 @@ use axum::{
 };
 #[allow(unused_imports)]
 use axum::debug_handler;
-use maud::{html, Markup};
+use maud::{html, Markup, DOCTYPE};
 use sqlx::sqlite::SqlitePoolOptions;
 use serde::{Deserialize};
 use std::{
@@ -21,6 +22,7 @@ use std::{
 };
 use uuid::Uuid;
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
+use tower_http::services::{ServeDir, ServeFile};
 
 const COOKIE_UUID_NAME: &str = "lsys-uuid";
 #[tokio::main]
@@ -40,36 +42,96 @@ async fn main() {
 		.route("/", get(display_all) )
 		.route("/login", get(display_login).post(perform_login) )
 		.route("/register", get(display_login).post(perform_register) )
+		.route("/book", get( display_book ))
 		.layer(CookieManagerLayer::new())
+		.nest_service("/files",
+			ServeDir::new("files")
+				.fallback(ServeFile::new("files/404.html"))
+		)
 		.with_state(new_shared_state(pool).await);
 
 	let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
 	axum::serve(listener, app).await.unwrap();
 }
 
+//TODO: use sub-state to account maps, book maps
+// : each sub-state could have it's own Mutex instead of a 'global' mutex
 type SharedState = Arc<tokio::sync::Mutex<ServerState>>;
+#[derive(Clone, Debug)]
+struct ServerState {
+	db: sqlx::Pool<sqlx::Sqlite>,
+	bid_to_book: HashMap<BID, Book>,
+	uuid_to_account: HashMap<Uuid, Arc<Box<Account>>>,
+	uid_to_account: HashMap<UID, Arc<Box<Account>>>,
+	email_to_uid: HashMap<String, UID>,
+	ISBN_to_authors: HashMap<BID, Vec<Arc<Box<Author>>>>,
+	aid_to_authors: HashMap<AID, Arc<Box<Author>>>,
+}
 
 async fn new_shared_state(db: sqlx::Pool<sqlx::Sqlite>) -> SharedState {
-	let books = sqlx::query_as!(
-		BookQuery,
-		"SELECT time, is_borrow, id, ISBN, name, published, user_id FROM books;"
-	).fetch_all(&db).await.expect("can't parse row from books into BookQuery");
-
-	let books:Vec<Book> = books.iter()
-		.map(Book::from_query)
-		.collect();
-
 	let accounts = sqlx::query_as!(
 		AccountQuery,
 		"SELECT id, name, email, pass_hash, is_worker FROM accounts;",
 	).fetch_all(&db).await.expect("can't parse row from accounts into AccountQuery");
 
+	let authors = sqlx::query_as!(
+		Author,
+		"SELECT id, name FROM authors",
+	).fetch_all(&db).await.expect("can't parse row from authors into Author");
+
+	let wrotes = sqlx::query!(
+		"SELECT author_id, ISBN FROM wrote",
+	).fetch_all(&db).await.expect("can't parse row from wrote");
+
+	//TODO: impl for Author
+	// : Author::update_maps(Self, &mut state, Vec<ISBN>)
+	// : Self.update_map(&mut state, ISBN)
+	let mut ISBN_to_authors = HashMap::<ISBN, Vec<Arc<Box<Author>>>>::new();
+	let mut ISBN_to_anames = HashMap::<ISBN, Vec<String>>::new();
+	let mut aid_to_authors = HashMap::<AID, Arc<Box<Author>>>::new();
+	for author in authors {
+		let author = Box::new(author);
+		let author = Arc::new(author);
+		aid_to_authors.insert(author.id as AID, author);
+	}
+
+	for wrote in wrotes {
+		let author = aid_to_authors
+			.get(&wrote.author_id)
+			.expect("author_id in Wrote doens't match to an author");
+		match ISBN_to_anames.get_mut(&wrote.ISBN) {
+			Some(authors)=>{authors.push(author.name.clone())}
+			None=>{
+				ISBN_to_anames.insert(wrote.ISBN, vec![author.name.clone()]);
+			}
+		}
+		match ISBN_to_authors.get_mut(&wrote.ISBN) {
+			Some(authors)=>{authors.push(Arc::clone(author))}
+			None=>{
+				ISBN_to_authors.insert(wrote.ISBN, vec![Arc::clone(author)]);
+			}
+		}
+	}
+
+	let books = sqlx::query_as!(
+		BookQuery,
+		"SELECT time, is_borrow, id, ISBN, name, published, user_id FROM books;"
+	).fetch_all(&db).await.expect("can't parse row from books into BookQuery");
+
+	let mut bid_to_book = HashMap::new();
+	for book in books {
+		let book = Book::from_query(&book, ISBN_to_anames.get(&book.ISBN));
+		bid_to_book.insert(book.bid, book);
+	}
+
 	let mut state = ServerState{
 		db,
-		books,
+		bid_to_book,
 		uuid_to_account: HashMap::new(),
 		uid_to_account: HashMap::new(),
 		email_to_uid: HashMap::new(),
+		aid_to_authors,
+		ISBN_to_authors,
 	};
 
 	accounts.iter()
@@ -111,6 +173,29 @@ async fn perform_login(
 	}
 }
 
+async fn display_book(
+	State(stt): State<SharedState>,
+	cookies: Cookies,
+	Query(bid): Query<BookParam>,
+) -> Result<Markup, Redirect> {
+	let state = Arc::clone(&stt);
+	let state = state.lock().await;
+
+	//TODO set goto
+	let acc = cookies.get(COOKIE_UUID_NAME).ok_or(Redirect::to("/login"))?;
+	let acc = acc.value().to_owned();
+	let acc = Uuid::parse_str(&acc).or(Err(Redirect::to("/login")))?;
+	state.uuid_to_account.get(&acc).ok_or(Redirect::to("/login"))?;
+	println!("{bid:#?}");
+
+	let req_book = state.bid_to_book.get(&bid.bid);
+
+	Ok( match req_book {
+		Some(book)=>view_book(book.clone()),
+		None=>view_404(format!("/book?BID={}", bid.bid)),
+	} )
+}
+
 async fn display_login(
 	Query(goto): Query<Goto>,
 ) -> Markup {
@@ -133,6 +218,7 @@ async fn perform_register(
 		Some(goto)=>goto.as_str(),
 		None=>"/",
 	};
+
 	let mut state = stt.lock().await;
 	let acc = Account::new(&state.db, register).await;
 	let acc = acc.map_err(|e| view_login("", e.as_str(), goto))?;
@@ -156,16 +242,21 @@ async fn display_all(
 	let state = Arc::clone(&stt);
 	let state = state.lock().await;
 
-	let books = &state.books;
+	//let books = &state.books;
 
 	//TODO make into function
 	let cookie = cookies.get(COOKIE_UUID_NAME);
 	let acc = cookie.ok_or(Redirect::to("/login"))?.value().to_owned();
 	let acc = Uuid::parse_str(&acc).or(Err(Redirect::to("/login")))?;
-	let acc = state.uuid_to_account.get(&acc).ok_or(Redirect::to("/login"))?;
-	println!("{:#?}", acc);
+	state.uuid_to_account.get(&acc).ok_or(Redirect::to("/login"))?;
 
-	Ok(view_all_books(books))
+	let mut books = state.bid_to_book
+		.clone()
+		.into_values()
+		.collect::<Vec<Book>>();
+	books.sort_by_key(|book|book.name.clone());
+
+	Ok( view_all_books(&books) )
 }
 
 // password String -> hash i64 -> [u8] -> v3_uuid String
@@ -221,9 +312,13 @@ impl Account {
 }
 
 impl Book {
-	fn from_query(info: &BookQuery) -> Self {
+	fn from_query(info: &BookQuery, authors: Option<&Vec<String>>) -> Self {
 		// should not fail, since or is_borrow is NULL and time & user_id are also
 		// or is_borrow is Some() and so are time & user_id
+		let authors = match authors {
+			Some(authors)=>authors.clone(),
+			None=>Vec::<String>::new(),
+		};
 		let status = if let Some(is_borrow) = info.is_borrow {
 			Some(
 				Cell::new(BookStatus{
@@ -239,43 +334,115 @@ impl Book {
 			ISBN: info.ISBN.clone(),
 			bid: info.id.clone(),
 			name: info.name.clone(),
-			authors: Vec::new(),
+			authors: authors,
 			published: info.published.clone(),
 			status: status,
 		}
 	}
+
+	//fn from_form(info: &BookForm) {
+
+	//}
 }
 
 fn view_login(log_error: &str, reg_error: &str, goto: &str) -> Markup {
-	html! { body {
+	html! { (DOCTYPE) head {
+		link rel="stylesheet" type="text/css" href="/files/css/login.css"{}
+	} body {
 		p style="color: red;"{(log_error)}
 
-		form method="POST" action=({format!("login?goto={goto}")}) {
-			label for="login-email" {"Email:"}
-			input id="login-email" name="email" type="email" placeholder="email" {}
-			"  "
-			label for="login-pass" {"Password:"}
-			input id="login-pass" name="pass" type="password" placeholder="password" {}
-			button { "LogIn" }
+		p style="color: red;"{(reg_error)}
+		fieldset {
+			legend {"Login"}
+			form method="POST" action={"/login?goto="(goto)} {
+				label for="login-email" {"email:"}
+				input id="login-email" name="email" type="email" placeholder="email" {}
+				br {}
+				label for="login-pass" {"password:"}
+				input id="login-pass" name="pass" type="password" placeholder="password" {}
+				br {}
+				button { "LogIn" }
+			}
 		}
 
-		p style="color: red;"{(reg_error)}
-		form method="POST" action=({format!("register?goto=/{goto}")}) {
-			label for="register-username" {"User Name:"}
-			input id="register-username" name="name" type="text" placeholder="username" {}
-			"  "
-			label for="register-email" {"Email:"}
-			input id="register-email" name="email" type="email" placeholder="email" {}
-			"  "
-			label for="register-password" {"Password:"}
-			input id="register-password" name="pass" type="password" placeholder="password" {}
-			button { "Register" }
+		fieldset {
+			legend {"Register"}
+			form method="POST" action={"/register?goto="(goto)} {
+				label for="register-username" {"username:"}
+				input id="register-username" name="name" type="text" placeholder="username" {}
+				br {}
+				label for="register-email" {"email:"}
+				input id="register-email" name="email" type="email" placeholder="email" {}
+				br {}
+				label for="register-password" {"password:"}
+				input id="register-password" name="pass" type="password" placeholder="password" {}
+				br {}
+				button { "Register" }
+			}
+		}
+
+	} }
+}
+
+fn view_404(query: String) -> Markup {
+	html! { (DOCTYPE) body {
+		h1 { {"Can't find query: " (query)} }
+	} }
+}
+
+fn view_book(book: Book) -> Markup {
+	html!{ (DOCTYPE) head {
+		meta charset="UTF-8"{}
+		link rel="stylesheet" type="text/css" href="/files/css/book.css"{}
+		title { {"LSYS - " (book.name)} }
+	} body {
+		article {
+			aside { img
+				src={"/files/img/books/"(book.ISBN)}
+				onerror="this.src='/files/img/missing'" {}
+			}
+
+			section {
+				h1 id="book-name" { i { (book.name) } }
+				h5 id="ISBN" { (book.ISBN) }
+				h2 { { "Published in: " (book.published) } }
+			}
+
+			section {
+				@if book.status.is_some() {
+					p {"LOSER"}
+				} @ else {
+					form method="POST" action={"/reserve?bid="(book.ISBN)}{
+						button { }
+					}
+				}
+			}
 		}
 	} }
 }
 
+	//<section>
+	//{{ if .avail }}
+	//	<form> <button>Reserve</button> </form>
+	//{{ else }}
+	//	{{ if eq .borrower_status "reserved" }}
+	//		<h2>Status: Reserved</h2>
+	//		<p>Still possible to read this book inside the library</p>
+	//		<p>Book will be taken in {{.borrower_time_left}} days</p>
+	//		{{ if .borrower_status_past }}
+	//			<p>Book should have been returned {{.borrower_time_lim}} days ago</p>
+	//		{{ else }}
+	//			<p>Book may be returned in {{.borrower_time_lim}} days</p>
+	//		{{ end }}
+	//	{{ else }}
+	//		<h2>Status: Borrowed</h2>
+	//	{{ end }}
+	//{{ end }}
+	//</section>
+
+
 fn view_all_books(books: &Vec<Book>) -> Markup {
-	html! { body{
+	html! { (DOCTYPE) body{
 		table {
 
 			thead{ tr {
@@ -287,9 +454,15 @@ fn view_all_books(books: &Vec<Book>) -> Markup {
 
 			tbody{
 			@for book in books { tr{
-				th { (book.ISBN) }
-				td { (book.name) }
-				td { ("idk") }
+				th {
+					(book.ISBN)
+				}
+				td { a href={"/book?bid="(book.ISBN)}{ i { (book.name) } } }
+				td {
+					@for author in &book.authors {
+						p {(author)}
+					}
+				}
 				td { (book.published) }
 			} }
 			}
@@ -298,11 +471,17 @@ fn view_all_books(books: &Vec<Book>) -> Markup {
 }
 
 /*
+[worker] add book
+INSERT INTO books
+	(ISBN)
+VALUES
+	(?);
+
 [worker] create new book
 INSERT INTO books
-	(ISBN, name, published)
+	(ISBN)
 VALUES
-	(?, ?, ?);
+	(?);
 
 [user] reserve book
 UPDATE books SET
@@ -332,16 +511,6 @@ SELECT
 FROM
 	books;
 */
-
-//TODO: use sub-state to account maps, book maps
-#[derive(Clone, Debug)]
-struct ServerState {
-	db: sqlx::Pool<sqlx::Sqlite>,
-	books: Vec<Book>,
-	uuid_to_account: HashMap<Uuid, Arc<Box<Account>>>,
-	uid_to_account: HashMap<UID, Arc<Box<Account>>>,
-	email_to_uid: HashMap<String, UID>,
-}
 
 #[derive(Deserialize, Debug)]
 struct FormLogin {
@@ -385,8 +554,16 @@ struct BookStatus {
 	status: BorrowStatus,
 }
 
-type BID = i64;
 
+type AID = i64;
+#[derive(Debug, Clone)]
+struct Author {
+	id: i64,
+	name: String,
+}
+
+type BID = i64;
+type ISBN = i64;
 #[allow(non_snake_case)]
 #[derive(Debug, Clone)]
 struct Book {
@@ -400,8 +577,22 @@ struct Book {
 
 #[allow(non_snake_case)]
 #[derive(Debug, Clone)]
+struct BookForm {
+	ISBN: ISBN,
+}
+
+#[allow(non_snake_case)]
+#[derive(Debug, Clone)]
+struct NewBookForm {
+	ISBN: ISBN,
+	name: String,
+	published: String,
+}
+
+#[allow(non_snake_case)]
+#[derive(Debug, Clone)]
 struct BookQuery {
-	ISBN: i64,
+	ISBN: ISBN,
 	id: BID,
 
 	name: String,
@@ -442,3 +633,7 @@ struct Goto {
 	goto: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct BookParam {
+	bid: i64,
+}

@@ -11,13 +11,20 @@ DROP TABLE IF EXISTS books;
 CREATE TABLE IF NOT EXISTS books (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	ISBN INTEGER NOT NULL,
-	name TEXT NOT NULL,
-	published TEXT NOT NULL,
+
 	user_id INTEGER DEFAULT NULL,
 	time DATE DEFAULT NULL,
 	is_borrow BOOL DEFAULT NULL,
 	CHECK((time IS NULL) == (user_id IS NULL)),
 	CHECK((time IS NULL) == (is_borrow IS NULL))
+);
+
+DROP TABLE IF EXISTS book_info;
+CREATE TABLE IF NOT EXISTS book_info (
+	ISBN INTEGER NOT NULL PRIMARY KEY,
+	name TEXT NOT NULL,
+	published TEXT NOT NULL,
+	FOREIGN KEY(ISBN) REFERENCES books(ISBN)
 );
 
 DROP TABLE IF EXISTS authors;
@@ -48,10 +55,35 @@ CREATE TABLE IF NOT EXISTS borrow_log (
 	FOREIGN KEY(book_id) REFERENCES books(id)
 );
 
-INSERT INTO books
-	(id, ISBN, name, published)
+INSERT INTO book_info
+	(ISBN, name, published)
 VALUES
-	(1,3,'A Study In Scarlet','1878'),
-	(2,3,'A Study In Scarlet','1878'),
-	(3,3,'A Study In Scarlet','1878'),
-	(4,3,'A Study In Scarlet','1878');
+	(3,"A Study In Scarlet","1878"),
+	(4,"Foundation","1998"),
+	(5,"The Raven","1978"),
+	(6,"The Black Cat","1978");
+
+-- Could to info, ISBN -> (name, published)
+-- instead of keeping the same value in _every_ book
+INSERT INTO books
+	(id, ISBN)
+VALUES
+	(1,3), (2,3), (3,3),
+	(4,4), (5,5), (6,6),
+	(7,6), (8,3);
+
+INSERT INTO authors
+	(id, name)
+VALUES
+	(1, "Edgar Allan Poe"),
+	(2, "Isac Asimov"),
+	(3, "Arthur Conan Doyle");
+
+INSERT INTO wrote
+	(author_id, ISBN)
+VALUES
+	(3, 3),
+	(2, 4),
+	(3, 4),
+	(1, 5),
+	(1, 6);
