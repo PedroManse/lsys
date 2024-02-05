@@ -15,6 +15,7 @@ use axum::debug_handler;
 use maud::{html, Markup, DOCTYPE};
 use sqlx::sqlite::SqlitePoolOptions;
 use serde::{Deserialize};
+use chrono::{NaiveDate};
 use std::{
 	cell::Cell,
 	sync::Arc,
@@ -61,12 +62,12 @@ type SharedState = Arc<tokio::sync::Mutex<ServerState>>;
 #[derive(Clone, Debug)]
 struct ServerState {
 	db: sqlx::Pool<sqlx::Sqlite>,
-	bid_to_book: HashMap<BID, Book>,
-	uuid_to_account: HashMap<Uuid, Arc<Box<Account>>>,
-	uid_to_account: HashMap<UID, Arc<Box<Account>>>,
-	email_to_uid: HashMap<String, UID>,
-	ISBN_to_authors: HashMap<BID, Vec<Arc<Box<Author>>>>,
-	aid_to_authors: HashMap<AID, Arc<Box<Author>>>,
+	bid_to_book: HashMap<Bid, Book>,
+	uuid_to_account: HashMap<Uuid, Arc<Account>>,
+	uid_to_account: HashMap<Uid, Arc<Account>>,
+	email_to_uid: HashMap<String, Uid>,
+	ISBN_to_authors: HashMap<Bid, Vec<Arc<Author>>>,
+	aid_to_authors: HashMap<Aid, Arc<Author>>,
 }
 
 async fn new_shared_state(db: sqlx::Pool<sqlx::Sqlite>) -> SharedState {
@@ -87,13 +88,12 @@ async fn new_shared_state(db: sqlx::Pool<sqlx::Sqlite>) -> SharedState {
 	//TODO: impl for Author
 	// : Author::update_maps(Self, &mut state, Vec<ISBN>)
 	// : Self.update_map(&mut state, ISBN)
-	let mut ISBN_to_authors = HashMap::<ISBN, Vec<Arc<Box<Author>>>>::new();
+	let mut ISBN_to_authors = HashMap::<ISBN, Vec<Arc<Author>>>::new();
 	let mut ISBN_to_anames = HashMap::<ISBN, Vec<String>>::new();
-	let mut aid_to_authors = HashMap::<AID, Arc<Box<Author>>>::new();
+	let mut aid_to_authors = HashMap::<Aid, Arc<Author>>::new();
 	for author in authors {
-		let author = Box::new(author);
 		let author = Arc::new(author);
-		aid_to_authors.insert(author.id as AID, author);
+		aid_to_authors.insert(author.id as Aid, author);
 	}
 
 	for wrote in wrotes {
@@ -155,7 +155,7 @@ fn acquire_account(
 	state: ServerState,
 	cookies: Cookies,
 	red: Redirect,
-) -> Result<Arc<Box<Account>>, Redirect> {
+) -> Result<Arc<Account>, Redirect> {
 	let acc = cookies.get(COOKIE_UUID_NAME).ok_or(red.clone())?;
 	let acc = acc.value().to_owned();
 	let acc = Uuid::parse_str(&acc).or(Err(red.clone()))?;
@@ -181,10 +181,11 @@ async fn display_reserve_book(
 
 	let book = state.bid_to_book.get(&reserve.bid);
 	let book = book.map(|book|{
-		if let BorrowStatus::Avaliable = &book.status.get() {
-			view_reserve_book(book)
+		let status = &book.status.get();
+		if let BorrowStatus::Avaliable = status {
+			view_avaliable_book(book)
 		} else {
-			view_reserved_book(book)
+			view_reserved_book(book, status)
 		}
 	});
 
@@ -224,7 +225,7 @@ async fn perform_login(
 	};
 
 	let acc = state.email_to_uid.get(&login.email).ok_or(view_login("No such email", "", goto))?;
-	let acc = state.uid_to_account.get(&acc).ok_or(view_login("Can't find account", "", goto))?;
+	let acc = state.uid_to_account.get(acc).ok_or(view_login("Can't find account", "", goto))?;
 	let pass_hash = hash_pass(login.pass.as_bytes());
 	if acc.pass_hash != pass_hash {
 		Err(view_login("Wrong password", "", goto))
@@ -257,7 +258,7 @@ async fn display_book(
 
 	Ok( match req_book {
 		Some(book)=>view_book(book.clone()),
-		None=>view_404(format!("/book?BID={}", bid.bid)),
+		None=>view_404(format!("/book?Bid={}", bid.bid)),
 	} )
 }
 
@@ -326,8 +327,7 @@ async fn display_all(
 // password String -> hash i64 -> [u8] -> v3_uuid String
 impl Account {
 	fn update_maps(state: &mut ServerState, acc: Self) {
-		//TODO: test Arc without Box
-		let acc = Arc::new(Box::new(acc));
+		let acc = Arc::new(acc);
 		state.uuid_to_account.insert(acc.uuid, Arc::clone(&acc));
 		state.uid_to_account.insert(acc.uid, Arc::clone(&acc));
 		state.email_to_uid.insert(acc.email.clone(), acc.uid);
@@ -337,7 +337,7 @@ impl Account {
 		db: &sqlx::Pool<sqlx::Sqlite>,
 		form: FormRegister,
 	) -> Result<Self, String> {
-		if form.name.len() == 0 || form.email.len() == 0 || form.pass.len() == 0 {
+		if form.name.is_empty() || form.email.is_empty() || form.pass.is_empty() {
 			return Err("Field with not input".to_string());
 		}
 
@@ -354,7 +354,7 @@ impl Account {
 
 		// TODO check for repeated UUIDs even if UUID level unlikely
 		Ok(Account{
-			uid: uid as UID,
+			uid: uid as Uid,
 			name: form.name,
 			email: form.email,
 			pass_hash,
@@ -365,7 +365,7 @@ impl Account {
 
 	fn from_query(info: &AccountQuery) -> Self {
 		Self{
-			uid: info.id as UID,
+			uid: info.id as Uid,
 			name: info.name.clone(),
 			email: info.email.clone(),
 			pass_hash: info.pass_hash.clone(),
@@ -385,11 +385,11 @@ impl Book {
 		};
 		let status = BorrowStatus::from(info.is_borrow, info.user_id, info.time);
 		Book{
-			ISBN: info.ISBN.clone(),
-			bid: info.id.clone(),
-			name: info.name.clone(),
-			authors: authors,
-			published: info.published.clone(),
+			ISBN: info.ISBN,
+			bid: info.id,
+			name: info.name.to_owned(),
+			authors,
+			published: info.published.to_owned(),
 			status: Cell::new(status),
 		}
 	}
@@ -451,11 +451,53 @@ fn view_404(query: String) -> Markup {
 	} }
 }
 
-fn view_reserved_book(book: &Book) -> Markup {
-	html!{}
+fn view_reserved_book(book: &Book, status: &BorrowStatus) -> Markup {
+	html!{ (DOCTYPE) head {
+		meta charset="UTF-8"{}
+		link rel="stylesheet" type="text/css" href="/files/css/book.css"{}
+		title { {"LSYS - " (book.name)} }
+	} body {
+		article {
+			aside { img
+				src={"/files/img/books/"(book.ISBN)}
+				onerror="this.src='/files/img/missing'" {}
+			}
+
+			section {
+				h1 id="book-name" { i { (book.name) } }
+				h5 id="ISBN" { (book.ISBN) }
+				h2 { { "Published in: " (book.published) } }
+			}
+
+			section {
+				p { (("reserve info here")) }
+			}
+
+			section {
+				h2 {{"Status: " (status.to_string())}}
+				@match status {
+					BorrowStatus::Reserved(uid, when)=>{
+						p {"Still possible to read this book inside the library"}
+						p {"Book will be taken in {{.borrower_time_left}} days"}
+					},
+					BorrowStatus::Borrowed(uid, until)=>{
+						@let days = days_until(until.to_owned());
+						@if days == 0 {
+							p {"Book should be returned today!"}
+						} @else if days > 0 {
+							p { {"Book may be returned in, at most," (days) " days"} }
+						} @ else {
+							p { {"Book should have been returned " (days) " days ago"} }
+						}
+					},
+					_=>{ p {"A Grave Server Error Just Happend"} }
+				}
+			}
+		}
+	} }
 }
 
-fn view_reserve_book(book: &Book) -> Markup {
+fn view_avaliable_book(book: &Book) -> Markup {
 	html! { (DOCTYPE) head {
 		meta charset="UTF-8"{}
 		link rel="stylesheet" type="text/css" href="/files/css/book.css"{}
@@ -626,11 +668,11 @@ struct AccountQuery {
 }
 
 // TODO could use uuid_v3 with week + email + year, to keep UUIDs
-type UID = i64;
+type Uid = i64;
 
 #[derive(Debug, Clone)]
 struct Account {
-	uid: UID,
+	uid: Uid,
 	name: String,
 	email: String,
 	pass_hash: String,
@@ -641,18 +683,47 @@ struct Account {
 #[derive(PartialEq, Debug, Clone, Copy)]
 enum BorrowStatus {
 	Avaliable,
-	Reserved(UID, chrono::NaiveDate),
-	Borrowed(UID, chrono::NaiveDate),
+	Reserved(Uid, NaiveDate),
+	Borrowed(Uid, NaiveDate),
+}
+
+impl std::string::ToString for BorrowStatus {
+	fn to_string(&self) -> String {
+		match self {
+			BorrowStatus::Avaliable => "avaliable",
+			BorrowStatus::Reserved(_,_) => "reserved",
+			BorrowStatus::Borrowed(_,_) => "borrowed",
+		}.to_string()
+	}
+}
+
+fn days_until(when: NaiveDate) -> i64 {
+	let today = chrono::Utc::now().date_naive();
+	(when-today).num_days()
 }
 
 impl BorrowStatus {
 	fn is_avaliable(self) -> bool {
 		self == BorrowStatus::Avaliable
 	}
+	fn is_reserved(self) -> bool {
+		match self {
+			BorrowStatus::Avaliable => false,
+			BorrowStatus::Reserved(_,_) => true,
+			BorrowStatus::Borrowed(_,_) => false,
+		}
+	}
+	fn is_borrowed(self) -> bool {
+		match self {
+			BorrowStatus::Avaliable => false,
+			BorrowStatus::Reserved(_,_) => false,
+			BorrowStatus::Borrowed(_,_) => true,
+		}
+	}
 	fn from(
 		is_borrow: Option<bool>,
-		uid: Option<UID>,
-		date: Option<chrono::NaiveDate>
+		uid: Option<Uid>,
+		date: Option<NaiveDate>
 	) -> Self {
 		//TODO can panic
 		match is_borrow {
@@ -667,20 +738,21 @@ impl BorrowStatus {
 	}
 }
 
-type AID = i64;
+type Aid = i64;
 #[derive(Debug, Clone)]
 struct Author {
 	id: i64,
 	name: String,
 }
 
-type BID = i64;
+type Bid = i64;
+#[allow(clippy::upper_case_acronyms)]
 type ISBN = i64;
 #[allow(non_snake_case)]
 #[derive(Debug, Clone)]
 struct Book {
 	ISBN: i64,
-	bid: BID,
+	bid: Bid,
 	name: String,
 	authors: Vec<String>,
 	published: String,
@@ -703,18 +775,18 @@ struct NewBookForm {
 
 #[derive(Debug, Deserialize)]
 struct ReserveBookForm {
-	bid: BID,
+	bid: Bid,
 }
 
 #[allow(non_snake_case)]
 #[derive(Debug, Clone)]
 struct BookQuery {
 	ISBN: ISBN,
-	id: BID,
+	id: Bid,
 	name: String,
 	published: String,
-	user_id: Option<UID>,
-	time: Option<chrono::NaiveDate>,
+	user_id: Option<Uid>,
+	time: Option<NaiveDate>,
 	is_borrow: Option<bool>,
 }
 
