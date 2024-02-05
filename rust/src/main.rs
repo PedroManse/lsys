@@ -2,7 +2,6 @@
 #![allow(dead_code)]
 // library system
 
-//TODO minijinja
 use axum::{
 	Form,
 	routing::get,
@@ -12,18 +11,20 @@ use axum::{
 };
 #[allow(unused_imports)]
 use axum::debug_handler;
+//TODO minijinja
 use maud::{html, Markup, DOCTYPE};
 use sqlx::sqlite::SqlitePoolOptions;
 use serde::{Deserialize};
 use chrono::{NaiveDate};
 use std::{
-	cell::Cell,
 	sync::Arc,
 	collections::HashMap,
 };
 use uuid::Uuid;
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::{ServeDir, ServeFile};
+mod types;
+use types::*;
 
 const COOKIE_UUID_NAME: &str = "lsys-uuid";
 #[tokio::main]
@@ -45,6 +46,7 @@ async fn main() {
 		.route("/register", get(display_login).post(perform_register) )
 		.route("/book", get( display_book ))
 		.route("/reserve", get(display_reserve_book).post(perform_reserve))
+		.route("/test", get(dtest))
 		.layer(CookieManagerLayer::new())
 		.nest_service("/files",
 			ServeDir::new("files")
@@ -68,6 +70,7 @@ struct ServerState {
 	email_to_uid: HashMap<String, Uid>,
 	ISBN_to_authors: HashMap<Bid, Vec<Arc<Author>>>,
 	aid_to_authors: HashMap<Aid, Arc<Author>>,
+	visits: i64,
 }
 
 async fn new_shared_state(db: sqlx::Pool<sqlx::Sqlite>) -> SharedState {
@@ -133,17 +136,17 @@ async fn new_shared_state(db: sqlx::Pool<sqlx::Sqlite>) -> SharedState {
 		email_to_uid: HashMap::new(),
 		aid_to_authors,
 		ISBN_to_authors,
+		visits: 0,
 	};
 
 	accounts.iter()
 		.map(Account::from_query)
 		.for_each( |acc| Account::update_maps(&mut state, acc) );
 
-
 	Arc::new( tokio::sync::Mutex::new( state ))
 }
 
-async fn acquire_state(
+async fn read_state(
 	stt: SharedState,
 ) -> ServerState {
 	let state = Arc::clone(&stt);
@@ -151,7 +154,7 @@ async fn acquire_state(
 	state.clone()
 }
 
-fn acquire_account(
+fn read_account(
 	state: ServerState,
 	cookies: Cookies,
 	red: Redirect,
@@ -163,7 +166,7 @@ fn acquire_account(
 	Ok(acc.clone())
 }
 
-fn acquire_redirect(
+fn make_redirect(
 	url: String,
 ) -> Redirect {
 	Redirect::to(url.as_str())
@@ -175,9 +178,9 @@ async fn display_reserve_book(
 	cookies: Cookies,
 	Form(reserve): Form<ReserveBookForm>
 ) -> Result<Markup, Redirect> {
-	let state = acquire_state(stt).await;
-	let loginback = acquire_redirect(format!("/login?goto=/book?bid={}", reserve.bid));
-	acquire_account(state.clone(), cookies, loginback)?;
+	let state = read_state(stt).await;
+	let loginback = make_redirect(format!("/login?goto=/reserve?bid={}", reserve.bid));
+	read_account(state.clone(), cookies, loginback)?;
 
 	let book = state.bid_to_book.get(&reserve.bid);
 	let book = book.map(|book|{
@@ -195,26 +198,71 @@ async fn display_reserve_book(
 		)
 	)
 }
+async fn dtest(
+	State(stt): State<SharedState>,
+) -> Markup {
+	let state = Arc::clone(&stt);
+	let mut state = state.lock().await;
+	state.visits+=1;
+	html!{
+		p{(state.visits)}
+	}
+}
 
 async fn perform_reserve(
 	State(stt): State<SharedState>,
 	cookies: Cookies,
 	Form(reserve): Form<ReserveBookForm>
 ) -> Result<Markup, Redirect> {
-	let state = acquire_state(stt).await;
-	let loginback = acquire_redirect(format!("/login?goto=/book?bid={}", reserve.bid));
-	let _acc = acquire_account(state.clone(), cookies, loginback)?;
-
-	let _book = state.bid_to_book.get(&reserve.bid);
-	todo!()
+	let state = Arc::clone(&stt);
+	let state = state.lock().await;
+	let loginback = make_redirect(format!("/login?goto=/book?bid={}", reserve.bid));
+	let home = make_redirect("/".to_owned());
+	let acc = read_account(state.clone(), cookies, loginback)?;
+	let book = state.bid_to_book.get(&reserve.bid).ok_or(home.clone())?;
+	let reserve_error = book.reserve(&acc, &state.db);
+	if let Some(error) = reserve_error {
+		return Ok( match error {
+			ReserveBookError::Reserved(until)=>html!{ p { (until.format("%d/%m/%y")) } },
+			ReserveBookError::Borrowed(until)=>html!{ p { (until.format("%d/%m/%y")) } },
+			ReserveBookError::DBError(err)=>html!{ p { (err) } },
+		} )
+	}
+	let book = book.clone();
+	//TODO RwLock instead of mutex
+	// this part drops the immutable state in the mutex then recovers it as mutable this can,
+	// however, cause colision when the state is not yet updated, but in this function the book
+	drop(state);
+	let state = Arc::clone(&stt);
+	let mut state = state.lock().await;
+	state.bid_to_book.insert(book.bid, book.clone());
+	Ok(view_book(book.clone(), &acc))
 }
+	//state.bid_to_book.insert(book.bid, book.clone());
+	//TODO: display_reserve_book
+	//if let Some(error) = reserve_error {
+	//	Ok(match error {
+	//		ReserveBookError::Reserved(until) => {
+	//			//TODO tell when book will be free
+	//			view_error(
+	//				"book already reserved for the next {} days, you can still borrow it at the library".to_owned()
+	//			)
+	//		},
+	//		ReserveBookError::Borrowed(until) => {
+	//			//TODO tell when book will be free
+	//			view_error(
+	//				"book still borrowed for the next {} days".to_owned()
+	//			)
+	//		},
+	//	})
+	//} else {
 
 #[debug_handler]
 async fn perform_login(
 	State(stt): State<SharedState>,
 	cookies: Cookies,
 	Query(goto): Query<Goto>,
-	Form(login): Form<FormLogin>
+	Form(login): Form<FormLogin>,
 ) -> Result<Redirect, Markup> {
 	let state = Arc::clone(&stt);
 	let state = state.lock().await;
@@ -245,19 +293,14 @@ async fn display_book(
 	cookies: Cookies,
 	Query(bid): Query<BookParam>,
 ) -> Result<Markup, Redirect> {
-	let loginback = Redirect::to(format!("/login?goto=/book?bid={}", bid.bid).as_str());
-	let state = Arc::clone(&stt);
-	let state = state.lock().await;
-
-	let acc = cookies.get(COOKIE_UUID_NAME).ok_or(loginback.clone())?;
-	let acc = acc.value().to_owned();
-	let acc = Uuid::parse_str(&acc).or(Err(loginback.clone()))?;
-	state.uuid_to_account.get(&acc).ok_or(loginback)?;
+	let state = read_state(stt).await;
+	let loginback = make_redirect(format!("/login?goto=/book?bid={}", bid.bid));
+	let acc = read_account(state.clone(), cookies, loginback)?;
 
 	let req_book = state.bid_to_book.get(&bid.bid);
 
 	Ok( match req_book {
-		Some(book)=>view_book(book.clone()),
+		Some(book)=>view_book(book.clone(), &acc),
 		None=>view_404(format!("/book?Bid={}", bid.bid)),
 	} )
 }
@@ -375,30 +418,6 @@ impl Account {
 	}
 }
 
-impl Book {
-	fn from_query(info: &BookQuery, authors: Option<&Vec<String>>) -> Self {
-		// should not fail, since or is_borrow is NULL and time & user_id are also
-		// or is_borrow is Some() and so are time & user_id
-		let authors = match authors {
-			Some(authors)=>authors.clone(),
-			None=>Vec::<String>::new(),
-		};
-		let status = BorrowStatus::from(info.is_borrow, info.user_id, info.time);
-		Book{
-			ISBN: info.ISBN,
-			bid: info.id,
-			name: info.name.to_owned(),
-			authors,
-			published: info.published.to_owned(),
-			status: Cell::new(status),
-		}
-	}
-
-	//fn from_form(info: &BookForm) {
-
-	//}
-}
-
 fn view_login(log_error: &str, reg_error: &str, goto: &str) -> Markup {
 	html! { (DOCTYPE) head {
 		link rel="stylesheet" type="text/css" href="/files/css/login.css"{}
@@ -444,7 +463,6 @@ fn view_error(error_desc: String) -> Markup {
 	} }
 }
 
-
 fn view_404(query: String) -> Markup {
 	html! { (DOCTYPE) body {
 		h1 { {"Can't find query: " (query)} }
@@ -470,15 +488,17 @@ fn view_reserved_book(book: &Book, status: &BorrowStatus) -> Markup {
 			}
 
 			section {
-				p { (("reserve info here")) }
+				p { (format!("{book:#?}")) }
 			}
 
 			section {
 				h2 {{"Status: " (status.to_string())}}
 				@match status {
 					BorrowStatus::Reserved(uid, when)=>{
-						p {"Still possible to read this book inside the library"}
-						p {"Book will be taken in {{.borrower_time_left}} days"}
+						@let days = days_until(when.to_owned());
+						p { {"days:" (days)} }
+						//p {"Still possible to read this book inside the library"}
+						//p {"Book will be taken in {{.borrower_time_left}} days"}
 					},
 					BorrowStatus::Borrowed(uid, until)=>{
 						@let days = days_until(until.to_owned());
@@ -516,11 +536,12 @@ fn view_avaliable_book(book: &Book) -> Markup {
 			}
 
 			section {
-				p { (("reserve info here")) }
+				p { (format!("{book:#?}")) }
 			}
 
 			section {
 				form method="POST" action={"/reserve?bid="(book.bid)}{
+					input style="display: none;" name="bid" value=(book.bid){}
 					button { "Reserve!" }
 				}
 			}
@@ -528,7 +549,7 @@ fn view_avaliable_book(book: &Book) -> Markup {
 	} }
 }
 
-fn view_book(book: Book) -> Markup {
+fn view_book(book: Book, viewer: &Account) -> Markup {
 	html!{ (DOCTYPE) head {
 		meta charset="UTF-8"{}
 		link rel="stylesheet" type="text/css" href="/files/css/book.css"{}
@@ -547,38 +568,33 @@ fn view_book(book: Book) -> Markup {
 			}
 
 			section {
-				@if book.status.get().is_avaliable() {
-					//TODO!
-					p {"LOSER!"}
-				} @ else {
-					form method="GET" action={"/reserve?bid="(book.bid)}{
-						button { "Reserve" }
+				@let status = book.status.get();
+				@let (with_viewer, until) = status.is_with_viewer(viewer.uid);
+				p {{"is avaliable: "(status.is_avaliable())}}
+				@if status.is_avaliable() {
+					a href={"/reserve?bid=" (book.bid)} {"Reserve"}
+				} @else if with_viewer {
+					@let until = until.unwrap();
+					@let days = days_until(until);
+					//TODO check if will borrow or will return
+					@if days == 0 {
+						p { "This book is with you, and should be returned today" }
+					} @else if days > 0 {
+						p { "This book is with you, and should be returned in " (days) " days" }
+					} @else {
+						p { "This book is with you, and should have been returned " (days) " days ago" }
 					}
+				} @else {
+					// TODO
+					p {"LOSER"}
 				}
 			}
 		}
 	} }
 }
 
-	//<section>
-	//{{ if .avail }}
-	//	<form> <button>Reserve</button> </form>
-	//{{ else }}
-	//	{{ if eq .borrower_status "reserved" }}
-	//		<h2>Status: Reserved</h2>
-	//		<p>Still possible to read this book inside the library</p>
-	//		<p>Book will be taken in {{.borrower_time_left}} days</p>
-	//		{{ if .borrower_status_past }}
-	//			<p>Book should have been returned {{.borrower_time_lim}} days ago</p>
-	//		{{ else }}
-	//			<p>Book may be returned in {{.borrower_time_lim}} days</p>
-	//		{{ end }}
-	//	{{ else }}
-	//		<h2>Status: Borrowed</h2>
-	//	{{ end }}
-	//{{ end }}
-	//</section>
-
+//TODO
+//fn view_status(book, uid)
 
 fn view_all_books(books: &Vec<Book>) -> Markup {
 	html! { (DOCTYPE) body{
@@ -596,7 +612,7 @@ fn view_all_books(books: &Vec<Book>) -> Markup {
 				th {
 					(book.ISBN)
 				}
-				td { a href={"/book?bid="(book.ISBN)}{ i { (book.name) } } }
+				td { a href={"/book?bid="(book.bid)}{ i { (book.name) } } }
 				td {
 					@for author in &book.authors {
 						p {(author)}
@@ -609,185 +625,9 @@ fn view_all_books(books: &Vec<Book>) -> Markup {
 	} }
 }
 
-/*
-[worker] add book
-INSERT INTO books
-	(ISBN)
-VALUES
-	(?);
-
-[worker] create new book
-INSERT INTO books
-	(ISBN)
-VALUES
-	(?);
-
-[user] reserve book
-UPDATE books SET
-	(user_id, time, is_borrow)
-VALUES
-	(?, ?, false);
-
-[worker] borrow book -- as per user reservation
-UPDATE books SET
-	(time, is_borrow)
-VALUES
-	(?, true)
-WHERE
-	(book_id == ?);
-
-[worker] return book -- as per user IRL action
-UPDATE books SET
-	(user_id, time, is_borrow)
-VALUES
-	(NULL, NULL, NULL)
-WHERE
-	(book_id == ?);
-*/
-
-#[derive(Deserialize, Debug)]
-struct FormLogin {
-	email: String,
-	pass: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct FormRegister {
-	name: String,
-	email: String,
-	pass: String,
-}
-
-#[derive(Debug, Clone)]
-struct AccountQuery {
-	id: i64,
-	name: String,
-	email: String,
-	pass_hash: String,
-	is_worker: bool,
-}
-
-// TODO could use uuid_v3 with week + email + year, to keep UUIDs
-type Uid = i64;
-
-#[derive(Debug, Clone)]
-struct Account {
-	uid: Uid,
-	name: String,
-	email: String,
-	pass_hash: String,
-	uuid: Uuid,
-	is_worker: bool,
-}
-
-#[derive(PartialEq, Debug, Clone, Copy)]
-enum BorrowStatus {
-	Avaliable,
-	Reserved(Uid, NaiveDate),
-	Borrowed(Uid, NaiveDate),
-}
-
-impl std::string::ToString for BorrowStatus {
-	fn to_string(&self) -> String {
-		match self {
-			BorrowStatus::Avaliable => "avaliable",
-			BorrowStatus::Reserved(_,_) => "reserved",
-			BorrowStatus::Borrowed(_,_) => "borrowed",
-		}.to_string()
-	}
-}
-
 fn days_until(when: NaiveDate) -> i64 {
 	let today = chrono::Utc::now().date_naive();
 	(when-today).num_days()
-}
-
-impl BorrowStatus {
-	fn is_avaliable(self) -> bool {
-		self == BorrowStatus::Avaliable
-	}
-	fn is_reserved(self) -> bool {
-		match self {
-			BorrowStatus::Avaliable => false,
-			BorrowStatus::Reserved(_,_) => true,
-			BorrowStatus::Borrowed(_,_) => false,
-		}
-	}
-	fn is_borrowed(self) -> bool {
-		match self {
-			BorrowStatus::Avaliable => false,
-			BorrowStatus::Reserved(_,_) => false,
-			BorrowStatus::Borrowed(_,_) => true,
-		}
-	}
-	fn from(
-		is_borrow: Option<bool>,
-		uid: Option<Uid>,
-		date: Option<NaiveDate>
-	) -> Self {
-		//TODO can panic
-		match is_borrow {
-			Some(is_borrow)=>{
-				if is_borrow {
-					BorrowStatus::Borrowed(uid.unwrap(), date.unwrap())
-				} else {
-					BorrowStatus::Reserved(uid.unwrap(), date.unwrap())
-				}},
-			None=>BorrowStatus::Avaliable
-		}
-	}
-}
-
-type Aid = i64;
-#[derive(Debug, Clone)]
-struct Author {
-	id: i64,
-	name: String,
-}
-
-type Bid = i64;
-#[allow(clippy::upper_case_acronyms)]
-type ISBN = i64;
-#[allow(non_snake_case)]
-#[derive(Debug, Clone)]
-struct Book {
-	ISBN: i64,
-	bid: Bid,
-	name: String,
-	authors: Vec<String>,
-	published: String,
-	status: Cell<BorrowStatus>,
-}
-
-#[allow(non_snake_case)]
-#[derive(Debug, Clone)]
-struct BookForm {
-	ISBN: ISBN,
-}
-
-#[allow(non_snake_case)]
-#[derive(Debug, Clone)]
-struct NewBookForm {
-	ISBN: ISBN,
-	name: String,
-	published: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReserveBookForm {
-	bid: Bid,
-}
-
-#[allow(non_snake_case)]
-#[derive(Debug, Clone)]
-struct BookQuery {
-	ISBN: ISBN,
-	id: Bid,
-	name: String,
-	published: String,
-	user_id: Option<Uid>,
-	time: Option<NaiveDate>,
-	is_borrow: Option<bool>,
 }
 
 // djb2
@@ -807,9 +647,4 @@ fn hash_pass(pass: &[u8]) -> String {
 #[derive(Debug, Deserialize)]
 struct Goto {
 	goto: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BookParam {
-	bid: i64,
 }
