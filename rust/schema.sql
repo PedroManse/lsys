@@ -91,3 +91,12 @@ INSERT INTO accounts
 VALUES
 	('manse','pmanse@lsys.com','a6f85bd2-a2a5-360b-a4e4-13b8eb84b14e',true),
 	('manse','pedro@manse.com','a6f85bd2-a2a5-360b-a4e4-13b8eb84b14e',false);
+
+-- select books to display
+--SELECT
+--books.id, books.ISBN, books.user_id, books.time, books.is_borrow, book_info.name, book_info.published, group_concat(authors.name)
+--FROM books
+--INNER JOIN authors, wrote USING (ISBN), book_info USING (ISBN)
+--WHERE wrote.author_id == authors.id
+--GROUP BY books.id;
+
